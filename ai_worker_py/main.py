@@ -2,8 +2,10 @@
 Superintendent AI Worker - Gemini reasoning and ElevenLabs TTS.
 """
 import base64
+import hashlib
 import json
 import os
+import time
 from typing import Any
 
 import google.generativeai as genai
@@ -46,6 +48,14 @@ class SpeakResponse(BaseModel):
     audio_url: str
 
 
+REASON_CACHE_TTL = 60
+_reason_cache: dict[str, tuple[float, ReasonResponse]] = {}
+
+
+def _cache_key(summary: str) -> str:
+    return hashlib.sha256((summary or "")[:2000].encode()).hexdigest()
+
+
 REASON_PROMPT = """You are The Superintendent, an AI civic intelligence system. Analyze the following urban telemetry/sensor data and produce a structured response.
 
 Telemetry summary:
@@ -68,6 +78,17 @@ Respond with valid JSON only, in this exact structure:
 @app.post("/reason", response_model=ReasonResponse)
 async def reason(req: ReasonRequest) -> ReasonResponse:
     """Call Gemini to reason over telemetry and return structured JSON."""
+    key = _cache_key(req.telemetry_summary)
+    now = time.time()
+    if key in _reason_cache:
+        ts, cached = _reason_cache[key]
+        if now - ts < REASON_CACHE_TTL:
+            return cached
+        del _reason_cache[key]
+    for k, (ts, _) in list(_reason_cache.items()):
+        if now - ts >= REASON_CACHE_TTL:
+            del _reason_cache[k]
+
     if not GEMINI_KEY:
         return ReasonResponse(
             summary="AI worker not configured (missing GEMINI_API_KEY).",
@@ -99,13 +120,15 @@ async def reason(req: ReasonRequest) -> ReasonResponse:
             explain="Gemini returned non-JSON output.",
         )
 
-    return ReasonResponse(
+    resp = ReasonResponse(
         summary=data.get("summary", ""),
         risk=data.get("risk", "low"),
         actions=data.get("actions", {"conservative": "", "aggressive": ""}),
         audio_text=data.get("audio_text", ""),
         explain=data.get("explain", ""),
     )
+    _reason_cache[key] = (time.time(), resp)
+    return resp
 
 
 @app.post("/speak", response_model=SpeakResponse)

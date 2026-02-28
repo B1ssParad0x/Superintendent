@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,6 +12,7 @@ import (
 	"superintendent/backend/config"
 	"superintendent/backend/db"
 	"superintendent/backend/handlers"
+	"superintendent/backend/ingest"
 )
 
 func main() {
@@ -41,6 +44,7 @@ func main() {
 	// Public
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	r.GET("/api/state", h.State)
+	r.GET("/api/telemetry", h.Telemetry)
 
 	// Ingest (edge-signed, optional key check)
 	r.POST("/api/ingest", h.Ingest)
@@ -57,6 +61,17 @@ func main() {
 		admin.POST("/commit", h.Commit)
 		admin.GET("/logs", h.Logs)
 	}
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := ingest.Run(ctx, cfg); err != nil {
+				log.Printf("ingest: %v", err)
+			}
+			cancel()
+		}
+	}()
 
 	addr := ":" + cfg.Port
 	log.Printf("Backend listening on %s", addr)

@@ -41,9 +41,19 @@ func (h *Handlers) Ingest(c *gin.Context) {
 		return
 	}
 
-	// Edge verification: require X-Edge-Key header when EDGE_API_KEY is set.
-	// In production, verify Ed25519 signature against registered edge pubkey per node_id.
-	if h.cfg.EdgeAPIKey != "" {
+	// Edge verification
+	switch {
+	case req.NodeID == "api-ingest-001" && req.Signature == "server-ingest":
+		// Server-side API ingest (NYC 311, OpenWeather)
+	case len(h.cfg.EdgePubkeys) > 0 && h.cfg.EdgePubkeys[req.NodeID] != nil:
+		// Ed25519 verification when pubkey is registered
+		metricsJSON, _ := json.Marshal(req.Metrics)
+		payload := auth.BuildSignablePayload(req.NodeID, req.Ts, req.Loc.Lat, req.Loc.Lon, string(metricsJSON))
+		if !auth.VerifyEdgeSignature(payload, req.Signature, h.cfg.EdgePubkeys[req.NodeID]) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid edge signature"})
+			return
+		}
+	case h.cfg.EdgeAPIKey != "":
 		if c.GetHeader("X-Edge-Key") != h.cfg.EdgeAPIKey {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid edge key"})
 			return
@@ -153,6 +163,24 @@ func (h *Handlers) Commit(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"tx": txSig, "hash": hash})
+}
+
+// Telemetry handles GET /api/telemetry - public recent telemetry for map
+func (h *Handlers) Telemetry(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	cur, err := db.TelemetryCol.Find(ctx, bson.M{},
+		options.Find().SetSort(bson.D{{Key: "ts", Value: -1}}).SetLimit(500))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var list []models.Telemetry
+	if err := cur.All(ctx, &list); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"telemetry": list})
 }
 
 // State handles GET /api/state - public city status

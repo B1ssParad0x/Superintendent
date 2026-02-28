@@ -27,6 +27,18 @@ export interface Decision {
   solana_tx: string
 }
 
+export interface TelemetryPoint {
+  node_id: string
+  ts: string
+  loc: { lat: number; lon: number }
+  metrics?: Record<string, unknown>
+}
+
+export async function getTelemetry() {
+  const { data } = await api.get<{ telemetry: TelemetryPoint[] }>('/api/telemetry')
+  return data.telemetry || []
+}
+
 export async function getState() {
   const { data } = await api.get<CityState>('/api/state')
   return data

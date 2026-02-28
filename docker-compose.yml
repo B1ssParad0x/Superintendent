@@ -27,6 +27,7 @@ services:
       - AI_WORKER_URL=http://ai_worker_py:8001
       - EDGE_API_KEY=${EDGE_API_KEY}
       - HOST_URL=${HOST_URL:-http://localhost:8000}
+      - OPENWEATHER_KEY=${OPENWEATHER_KEY}
     depends_on:
       - mongo
       - ai_worker_py

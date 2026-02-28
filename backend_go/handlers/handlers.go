@@ -64,7 +64,7 @@ func (h *Handlers) Ingest(c *gin.Context) {
 		return
 	}
 
-	// Async enqueue AI task (fire-and-forget for <50ms latency)
+	metricsJSON, _ := json.Marshal(req.Metrics)
 	go func() {
 		_ = h.worker.Reason(context.Background(), worker.ReasonRequest{
 			TelemetrySummary: string(metricsJSON),

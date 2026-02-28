@@ -25,6 +25,7 @@ services:
       - AUTH0_DOMAIN=${AUTH0_DOMAIN}
       - AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
       - SOLANA_RPC=${SOLANA_RPC:-https://api.devnet.solana.com}
+      - SOLANA_KEYPAIR_JSON=${SOLANA_KEYPAIR_JSON}
       - AI_WORKER_URL=http://ai_worker_py:8001
       - EDGE_API_KEY=${EDGE_API_KEY}
       - HOST_URL=${HOST_URL:-http://localhost:8000}

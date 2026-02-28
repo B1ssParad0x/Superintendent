@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { AxiosError } from 'axios'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -6,6 +6,18 @@ export const api = axios.create({
   baseURL: API_URL,
   headers: { 'Content-Type': 'application/json' },
 })
+
+/** Extract user-friendly error message from API or axios error */
+export function getErrorMessage(err: unknown): string {
+  if (err instanceof AxiosError) {
+    const msg = err.response?.data?.error ?? err.response?.data?.message
+    if (typeof msg === 'string') return msg
+    if (err.response?.status === 401) return 'Unauthorized'
+    if (err.response?.status === 403) return 'Access denied'
+    if (err.message) return err.message
+  }
+  return err instanceof Error ? err.message : 'Request failed'
+}
 
 // Attach JWT from Auth0
 export function setAuthToken(token: string) {

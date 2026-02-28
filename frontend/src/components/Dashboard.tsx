@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import Map from './Map'
-import { getState, getLogs, triggerReason, commitDecision, Decision } from '../api'
+import { getState, getLogs, triggerReason, commitDecision, getErrorMessage, Decision } from '../api'
 
 const mapboxToken = import.meta.env.VITE_MAPBOX_TOKEN || ''
 
@@ -9,7 +9,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ getToken }: DashboardProps) {
-  const [state, setState] = useState<{ status: string; alerts: number } | null>(null)
+  const [state, setState] = useState<{ status: string; alerts: number; summary?: string } | null>(null)
   const [decisions, setDecisions] = useState<Decision[]>([])
   const [reasonResult, setReasonResult] = useState<{
     summary?: string
@@ -22,9 +22,10 @@ export default function Dashboard({ getToken }: DashboardProps) {
   const refreshState = useCallback(async () => {
     try {
       const s = await getState()
-      setState({ status: s.status, alerts: s.alerts })
+      setState({ status: s.status, alerts: s.alerts, summary: s.summary })
+      setError(null)
     } catch (e) {
-      setError('Failed to load state')
+      setError(getErrorMessage(e))
     }
   }, [])
 
@@ -33,8 +34,9 @@ export default function Dashboard({ getToken }: DashboardProps) {
       const token = await getToken()
       const list = await getLogs(token)
       setDecisions(list || [])
+      setError(null)
     } catch (e) {
-      setError('Failed to load logs')
+      setError(getErrorMessage(e))
     }
   }, [getToken])
 
@@ -61,7 +63,7 @@ export default function Dashboard({ getToken }: DashboardProps) {
         audio_text: res.audio_text,
       })
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Reason failed')
+      setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -77,7 +79,7 @@ export default function Dashboard({ getToken }: DashboardProps) {
       setReasonResult(null)
       refreshLogs()
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Commit failed')
+      setError(getErrorMessage(e))
     } finally {
       setLoading(false)
     }
@@ -96,9 +98,16 @@ export default function Dashboard({ getToken }: DashboardProps) {
           </div>
         )}
         <div style={{ padding: '1rem 1.5rem', borderTop: '1px solid var(--border)' }}>
-          <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <span style={{ color: 'var(--text-muted)' }}>Status: {state?.status ?? '—'}</span>
-            <span style={{ color: 'var(--text-muted)' }}>Alerts: {state?.alerts ?? 0}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <span style={{ color: 'var(--text-muted)' }}>Status: {state?.status ?? '—'}</span>
+              <span style={{ color: 'var(--text-muted)' }}>Alerts: {state?.alerts ?? 0}</span>
+            </div>
+            {state?.summary && (
+              <p style={{ margin: 0, fontSize: '0.9rem', color: 'var(--text-muted)' }}>{state.summary}</p>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button
               onClick={onReason}
               disabled={loading}
@@ -148,9 +157,9 @@ export default function Dashboard({ getToken }: DashboardProps) {
         <h3 style={{ margin: '0 0 1rem', fontSize: '1rem' }}>Solana Audit Log</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {decisions.length === 0 && <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem' }}>No decisions yet</p>}
-          {decisions.map((d, i) => (
+          {decisions.map((d) => (
             <div
-              key={i}
+              key={d.solana_tx || d.hash || d.when}
               style={{
                 padding: '0.75rem',
                 background: 'var(--surface)',
@@ -158,9 +167,26 @@ export default function Dashboard({ getToken }: DashboardProps) {
                 border: '1px solid var(--border)',
               }}
             >
+              {d.when && (
+                <p style={{ margin: '0 0 0.25rem', fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                  {new Date(d.when).toLocaleString()}
+                </p>
+              )}
               <p style={{ margin: '0 0 0.25rem', fontSize: '0.85rem' }}>{d.summary}</p>
               <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>
-                TX: {d.solana_tx}
+                TX:{' '}
+                {d.solana_tx && !d.solana_tx.startsWith('dev-stub') ? (
+                  <a
+                    href={`https://explorer.solana.com/tx/${d.solana_tx}?cluster=devnet`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--accent)', textDecoration: 'none' }}
+                  >
+                    {d.solana_tx.slice(0, 12)}…
+                  </a>
+                ) : (
+                  d.solana_tx
+                )}
               </p>
             </div>
           ))}

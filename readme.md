@@ -110,6 +110,12 @@ go build -o edge .
 SUPER_API=http://your-backend:8000 EDGE_ID=pi-001 ./edge
 ```
 
+### Scripts
+
+- `scripts/seed_telemetry.sh` – Seed demo telemetry (bash)
+- `scripts/seed_telemetry.ps1` – Same for Windows (PowerShell)
+- `scripts/demo.sh` – Full demo flow
+
 ---
 
 ## Security Principles

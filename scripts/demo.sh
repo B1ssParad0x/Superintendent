@@ -1,5 +1,6 @@
 #!/bin/bash
 # Demo flow: ingest -> (manual: trigger reason, commit) -> check logs
+# Windows: run scripts/seed_telemetry.ps1 instead of seed_telemetry.sh
 set -e
 API=${1:-http://localhost:8000}
 

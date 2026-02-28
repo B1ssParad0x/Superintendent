@@ -1,0 +1,67 @@
+version: "3.8"
+
+# Load .env from project root if present
+# Run: cp .env.example .env && docker-compose up --build
+
+services:
+  mongo:
+    image: mongo:7
+    container_name: superintendent-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  backend_go:
+    build:
+      context: ./backend_go
+      dockerfile: Dockerfile
+    container_name: superintendent-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017
+      - AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
+      - SOLANA_RPC=${SOLANA_RPC:-https://api.devnet.solana.com}
+      - AI_WORKER_URL=http://ai_worker_py:8001
+      - EDGE_API_KEY=${EDGE_API_KEY}
+      - HOST_URL=${HOST_URL:-http://localhost:8000}
+    depends_on:
+      - mongo
+      - ai_worker_py
+    restart: unless-stopped
+
+  ai_worker_py:
+    build:
+      context: ./ai_worker_py
+      dockerfile: Dockerfile
+    container_name: superintendent-ai-worker
+    ports:
+      - "8001:8001"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - ELEVEN_API_KEY=${ELEVEN_API_KEY}
+      - ELEVEN_VOICE_ID=${ELEVEN_VOICE_ID}
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: superintendent-frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_AUTH0_DOMAIN=${AUTH0_DOMAIN}
+      - VITE_AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
+      - VITE_AUTH0_CLIENT_ID=${AUTH0_CLIENT_ID}
+      - VITE_MAPBOX_TOKEN=${MAPBOX_TOKEN}
+    depends_on:
+      - backend_go
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

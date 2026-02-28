@@ -61,26 +61,43 @@ The project fuses AI, blockchain auditing, and edge computing to build a secure,
 
 ### Environment Variables
 
-```
-AUTH0_DOMAIN=
-AUTH0_AUDIENCE=
-MONGO_URI=
-AI_API_KEY=
-VOICE_API_KEY=
-SOLANA_KEYPAIR_JSON=
-SOLANA_RPC=https://api.devnet.solana.com
-HOST_URL=https://your-server-domain
-```
+Copy `.env.example` to `.env` and configure:
+
+| Variable | Description |
+|----------|-------------|
+| `AUTH0_DOMAIN` | Auth0 tenant (optional for dev) |
+| `AUTH0_AUDIENCE` | API audience |
+| `AUTH0_CLIENT_ID` | SPA client ID |
+| `MONGO_URI` | MongoDB connection (default: `mongodb://mongo:27017` in Docker) |
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `ELEVEN_API_KEY` | ElevenLabs API key |
+| `ELEVEN_VOICE_ID` | ElevenLabs voice ID |
+| `SOLANA_KEYPAIR_JSON` | Base64 or JSON array keypair for devnet |
+| `SOLANA_RPC` | Solana RPC URL (default: devnet) |
+| `EDGE_API_KEY` | Shared secret for edge ingest (optional) |
+| `MAPBOX_TOKEN` | Mapbox token for dashboard map |
+
+**Dev mode:** Without Auth0 configured, the frontend runs in dev mode and the backend accepts `Bearer dev` for admin routes.
 
 ### Run Locally
 
-```
-git clone https://github.com/yourusername/superintendent.git
-cd superintendent
+```bash
+cp .env.example .env
+# Edit .env with your keys
 docker-compose up --build
 ```
 
-Backend will start on port 8000 and frontend on port 5173.
+- Backend: http://localhost:8000
+- Frontend: http://localhost:5173
+- AI Worker: http://localhost:8001
+
+### Edge Agent (Pi)
+
+```bash
+cd edge_pi
+go build -o edge .
+SUPER_API=http://your-backend:8000 EDGE_ID=pi-001 ./edge
+```
 
 ---
 

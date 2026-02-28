@@ -66,7 +66,7 @@ func (h *Handlers) Ingest(c *gin.Context) {
 
 	metricsJSON, _ := json.Marshal(req.Metrics)
 	go func() {
-		_ = h.worker.Reason(context.Background(), worker.ReasonRequest{
+		_, _ = h.worker.Reason(context.Background(), worker.ReasonRequest{
 			TelemetrySummary: string(metricsJSON),
 		})
 	}()

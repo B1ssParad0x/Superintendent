@@ -70,14 +70,12 @@ func (c *Client) SubmitMemo(ctx context.Context, memoText string) (string, error
 	if err != nil {
 		return "", err
 	}
-	msg, err := types.NewMessage(types.NewMessageParam{
+	blockhashStr := blockhash.Blockhash
+	msg := types.NewMessage(types.NewMessageParam{
 		FeePayer:        c.keypair.PublicKey,
-		RecentBlockhash: blockhash.Value.Blockhash.String(),
+		RecentBlockhash: blockhashStr,
 		Instructions:    []types.Instruction{inst},
 	})
-	if err != nil {
-		return "", err
-	}
 
 	tx, err := types.NewTransaction(types.NewTransactionParam{
 		Message: msg,
@@ -91,5 +89,5 @@ func (c *Client) SubmitMemo(ctx context.Context, memoText string) (string, error
 	if err != nil {
 		return "", err
 	}
-	return sig.String(), nil
+	return sig, nil
 }

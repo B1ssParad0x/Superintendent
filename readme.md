@@ -91,6 +91,17 @@ docker-compose up --build
 - Frontend: http://localhost:5173
 - AI Worker: http://localhost:8001
 
+### Production (Vultr + Atlas + Vercel)
+
+Use the production compose when deploying backend + AI worker to a server with MongoDB Atlas:
+
+```bash
+# Set MONGO_URI, HOST_URL, and other vars in .env
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Deploy the frontend separately (e.g. Vercel) with `VITE_API_URL` pointing to your backend.
+
 ### Edge Agent (Pi)
 
 ```bash

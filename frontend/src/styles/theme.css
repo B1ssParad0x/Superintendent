@@ -1,0 +1,49 @@
+:root {
+  --bg: #050505;
+  --surface: #111111;
+  --surface-elevated: #171717;
+  --border: #2a2a2a;
+  --text: #ffffff;
+  --text-muted: #a9a9a9;
+  --primary: #d2042d;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, system-ui, sans-serif;
+  background: radial-gradient(circle at top right, rgba(210, 4, 45, 0.18), transparent 40%), var(--bg);
+  color: var(--text);
+}
+
+a {
+  color: inherit;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.02), rgba(210, 4, 45, 0.03));
+  backdrop-filter: blur(4px);
+}
+
+.crisis {
+  box-shadow: 0 0 0 1px rgba(210, 4, 45, 0.45), 0 0 30px rgba(210, 4, 45, 0.25);
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-50%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 28s linear infinite;
+}

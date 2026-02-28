@@ -49,6 +49,9 @@ func main() {
 	// Ingest (edge-signed, optional key check)
 	r.POST("/api/ingest", h.Ingest)
 
+	// Edge audio cache - returns recent advisories with audio for Pi to cache
+	r.GET("/api/edge/audios", h.EdgeAudios)
+
 	// Admin-only
 	jwksURL := ""
 	if cfg.Auth0Domain != "" {

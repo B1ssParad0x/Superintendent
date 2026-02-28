@@ -183,6 +183,28 @@ func (h *Handlers) Telemetry(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"telemetry": list})
 }
 
+// EdgeAudios returns last 10 decisions with audio for edge caching
+func (h *Handlers) EdgeAudios(c *gin.Context) {
+	if h.cfg.EdgeAPIKey != "" && c.GetHeader("X-Edge-Key") != h.cfg.EdgeAPIKey {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid edge key"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	cur, err := db.DecisionsCol.Find(ctx, bson.M{"audio_url": bson.M{"$ne": ""}},
+		options.Find().SetSort(bson.D{{Key: "when", Value: -1}}).SetLimit(10))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var list []models.Decision
+	if err := cur.All(ctx, &list); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"audios": list})
+}
+
 // State handles GET /api/state - public city status
 func (h *Handlers) State(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
@@ -190,11 +212,24 @@ func (h *Handlers) State(c *gin.Context) {
 	count, _ := db.TelemetryCol.CountDocuments(ctx, bson.M{})
 	decCount, _ := db.DecisionsCol.CountDocuments(ctx, bson.M{})
 
+	summary := ""
+	var latest models.Decision
+	if err := db.DecisionsCol.FindOne(ctx, bson.M{},
+		options.FindOne().SetSort(bson.D{{Key: "when", Value: -1}})).Decode(&latest); err == nil && latest.Summary != "" {
+		summary = latest.Summary
+	}
+	if summary == "" && count > 0 {
+		summary = "Telemetry flowing. No advisories yet."
+	}
+	if summary == "" {
+		summary = "System online. Awaiting data."
+	}
+
 	c.JSON(http.StatusOK, models.CityState{
 		Status:  "operational",
 		Updated: time.Now(),
 		Alerts:  int(decCount),
-		Summary: "",
+		Summary: summary,
 	})
 	_ = count
 }

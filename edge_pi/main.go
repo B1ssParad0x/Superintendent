@@ -5,16 +5,22 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
+
+const maxCachedAudios = 10
 
 // Config from env
 var (
@@ -106,7 +112,7 @@ func collectMetrics() map[string]interface{} {
 	})
 }
 
-func sendTelemetry(pub ed25519.PublicKey, priv ed25519.PrivateKey) error {
+func sendTelemetry(_ ed25519.PublicKey, priv ed25519.PrivateKey) error {
 	ts := time.Now().Unix()
 	metrics := collectMetrics()
 	metricsJSON, _ := json.Marshal(metrics)
@@ -142,12 +148,98 @@ func sendTelemetry(pub ed25519.PublicKey, priv ed25519.PrivateKey) error {
 	return nil
 }
 
+func fetchAndCacheAudios() {
+	req, err := http.NewRequest(http.MethodGet, apiURL+"/api/edge/audios", nil)
+	if err != nil {
+		return
+	}
+	if edgeAPIKey != "" {
+		req.Header.Set("X-Edge-Key", edgeAPIKey)
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var out struct {
+		Audios []struct {
+			Hash     string `json:"hash"`
+			AudioURL string `json:"audio_url"`
+			Summary  string `json:"summary"`
+		} `json:"audios"`
+	}
+	if json.Unmarshal(body, &out) != nil {
+		return
+	}
+	audioDir := filepath.Join(cacheDir, "audio")
+	_ = os.MkdirAll(audioDir, 0755)
+	for i, a := range out.Audios {
+		if a.AudioURL == "" || i >= maxCachedAudios {
+			continue
+		}
+		if !strings.HasPrefix(a.AudioURL, "data:audio/") {
+			continue
+		}
+		parts := strings.SplitN(a.AudioURL, ",", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		data, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			continue
+		}
+		name := a.Hash
+		if name == "" {
+			h := sha256.Sum256(data)
+			name = fmt.Sprintf("%x", h[:8])
+		}
+		fpath := filepath.Join(audioDir, name+".mp3")
+		if err := os.WriteFile(fpath, data, 0644); err != nil {
+			log.Printf("cache audio: %v", err)
+		}
+	}
+	// Prune to last 10
+	entries, err := os.ReadDir(audioDir)
+	if err != nil || len(entries) <= maxCachedAudios {
+		return
+	}
+	type fi struct {
+		path string
+		mod  time.Time
+	}
+	var files []fi
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fi{filepath.Join(audioDir, e.Name()), info.ModTime()})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].mod.After(files[j].mod) })
+	for i := maxCachedAudios; i < len(files); i++ {
+		_ = os.Remove(files[i].path)
+	}
+}
+
 func main() {
 	loadConfig()
 	pub, priv := loadOrGenerateKeypair()
 	_ = pub
 
 	_ = os.MkdirAll(cacheDir, 0755)
+
+	audioTicker := time.NewTicker(2 * time.Minute)
+	go func() {
+		fetchAndCacheAudios()
+		for range audioTicker.C {
+			fetchAndCacheAudios()
+		}
+	}()
 
 	log.Printf("Edge %s starting, send interval %v", edgeID, sendInterval)
 	for {

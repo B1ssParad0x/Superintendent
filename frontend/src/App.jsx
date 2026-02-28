@@ -1,13 +1,15 @@
+import { lazy, Suspense } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import { motion } from 'framer-motion'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
-import Dashboard from './routes/Dashboard'
-import Logs from './routes/Logs'
-import Nodes from './routes/Nodes'
-import Admin from './routes/Admin'
-import About from './routes/About'
+import FaultyTerminal from './components/FaultyTerminal'
 import { useAppAuth } from './context/AuthProvider'
+
+const Dashboard = lazy(() => import('./routes/Dashboard'))
+const Logs = lazy(() => import('./routes/Logs'))
+const Nodes = lazy(() => import('./routes/Nodes'))
+const Admin = lazy(() => import('./routes/Admin'))
+const About = lazy(() => import('./routes/About'))
 
 function ProtectedRoute({ children, adminOnly = false }) {
   const { isLoading, isAuthenticated, isAdmin } = useAppAuth()
@@ -15,25 +17,6 @@ function ProtectedRoute({ children, adminOnly = false }) {
   if (!isAuthenticated) return <Navigate to="/" replace />
   if (adminOnly && !isAdmin) return <Navigate to="/dashboard" replace />
   return children
-}
-
-function FaultyTerminalBackground() {
-  return (
-    <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-30">
-      {Array.from({ length: 36 }).map((_, i) => (
-        <motion.div
-          key={i}
-          className="font-mono text-[10px] text-crimson/70"
-          initial={{ opacity: 0.2, x: Math.random() * 1200, y: Math.random() * 900 }}
-          animate={{ opacity: [0.1, 0.5, 0.15], x: Math.random() * 1200 }}
-          transition={{ duration: 4 + (i % 6), repeat: Infinity }}
-          style={{ position: 'absolute' }}
-        >
-          {`SYS${i.toString().padStart(2, '0')}> telemetry stream // hash:${Math.random().toString(16).slice(2, 8)}`}
-        </motion.div>
-      ))}
-    </div>
-  )
 }
 
 function AsciiTitle() {
@@ -57,7 +40,22 @@ function Landing() {
   if (isAuthenticated) return <Navigate to="/dashboard" replace />
   return (
     <main className="relative flex min-h-[calc(100vh-118px)] items-center justify-center overflow-hidden px-4">
-      <FaultyTerminalBackground />
+      <div className="pointer-events-none absolute inset-0 opacity-45">
+        <FaultyTerminal
+          scale={1.08}
+          gridMul={[2.2, 1.1]}
+          digitSize={1.4}
+          timeScale={0.28}
+          scanlineIntensity={0.42}
+          flickerAmount={0.8}
+          curvature={0.24}
+          tint="#e5e7eb"
+          mouseReact
+          mouseStrength={0.18}
+          pageLoadAnimation
+          brightness={0.95}
+        />
+      </div>
       <section className="panel relative z-10 w-full max-w-3xl rounded-2xl border border-crimson/40 p-8 text-center">
         <AsciiTitle />
         <h1 className="mt-3 font-display text-4xl tracking-wide text-white">Superintendent</h1>
@@ -76,43 +74,45 @@ export default function App() {
   return (
     <div className="min-h-screen bg-black text-white">
       <Navbar />
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route
-          path="/dashboard"
-          element={
-            <ProtectedRoute>
-              <Dashboard />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/logs"
-          element={
-            <ProtectedRoute>
-              <Logs />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/nodes"
-          element={
-            <ProtectedRoute>
-              <Nodes />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/admin"
-          element={
-            <ProtectedRoute adminOnly>
-              <Admin />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="/about" element={<About />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={<div className="p-8 text-center text-sm text-zinc-500">Loading view...</div>}>
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route
+            path="/dashboard"
+            element={
+              <ProtectedRoute>
+                <Dashboard />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/logs"
+            element={
+              <ProtectedRoute>
+                <Logs />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/nodes"
+            element={
+              <ProtectedRoute>
+                <Nodes />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute adminOnly>
+                <Admin />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/about" element={<About />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
       <Footer />
     </div>
   )

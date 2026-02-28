@@ -1,0 +1,145 @@
+# Superintendent
+
+> _"A city is a body. I am its nervous system."_
+
+---
+
+## Overview
+
+**Superintendent** is an AI-driven civic intelligence platform designed to monitor, interpret, and voice the state of a city in real time. It unifies live data streams, advanced reasoning, and secure infrastructure into one cohesive system that can summarize urban conditions, predict issues, and deliver natural, human-like advisories.
+
+The project fuses AI, blockchain auditing, and edge computing to build a secure, ethical, and insightful Smart City management framework.
+
+---
+
+## Key Features
+
+- **Live Data Ingestion:** Integrates public APIs such as weather and civic service feeds.
+- **AI Reasoning:** Uses a large language model to interpret data, identify trends, and propose actions.
+- **Natural Voice Output:** Generates expressive audio advisories for human operators.
+- **Immutable Logging:** Records critical decisions on the Solana devnet blockchain for transparency.
+- **Edge Device Integration:** Raspberry Pi acts as a secure edge node that signs telemetry and caches local data.
+- **Secure Authentication:** Protected by Auth0 JWT and cryptographic signing for data integrity.
+- **Web Dashboard:** Displays real-time maps, advisories, and blockchain audit trails.
+
+---
+
+## Architecture
+
+```
+[Edge Device]  →  [Backend Server]  →  [AI Worker]  →  [Dashboard]
+       |                |                   |                |
+   (Go Agent)     (Go + MongoDB)     (Python FastAPI)     (React + Mapbox)
+```
+
+**Components:**
+- **Edge Device:** Raspberry Pi 5 running a Go agent that signs and transmits telemetry.
+- **Backend:** Go API server with MongoDB Atlas integration, Auth0 authentication, and Solana auditing.
+- **AI Worker:** Python FastAPI service responsible for reasoning (Gemini API) and voice synthesis (ElevenLabs).
+- **Frontend:** React dashboard visualizing live data, advisories, and blockchain records.
+
+---
+
+## Tech Stack
+
+- **Languages:** Go, Python, JavaScript (React)
+- **Frameworks:** Gin, FastAPI, Vite
+- **Database:** MongoDB Atlas
+- **Auth:** Auth0
+- **Blockchain:** Solana devnet
+- **Deployment:** Docker, Vultr Cloud
+
+---
+
+## Setup
+
+### Prerequisites
+- Docker + Docker Compose
+- MongoDB Atlas account
+- Auth0 credentials
+- API keys for AI and voice services
+
+### Environment Variables
+
+```
+AUTH0_DOMAIN=
+AUTH0_AUDIENCE=
+MONGO_URI=
+AI_API_KEY=
+VOICE_API_KEY=
+SOLANA_KEYPAIR_JSON=
+SOLANA_RPC=https://api.devnet.solana.com
+HOST_URL=https://your-server-domain
+```
+
+### Run Locally
+
+```
+git clone https://github.com/yourusername/superintendent.git
+cd superintendent
+docker-compose up --build
+```
+
+Backend will start on port 8000 and frontend on port 5173.
+
+---
+
+## Security Principles
+
+- Every telemetry packet from the edge is signed using Ed25519 keys.
+- Auth0 enforces role-based access for all routes.
+- HTTPS enforced across all layers.
+- Sensitive data filtered at source before storage.
+- Immutable blockchain log ensures audit transparency.
+
+---
+
+## Demo Workflow
+
+1. Edge agent collects local or simulated telemetry.
+2. Backend verifies the signature and stores the data.
+3. AI Worker analyzes trends and generates summaries and advisories.
+4. Admin commits key decisions to Solana for audit.
+5. Dashboard displays current state, voice advisories, and blockchain proof.
+
+---
+
+## Ethical Framework
+
+- Human-in-the-loop: AI only assists, never enforces.
+- Transparent reasoning and data sources.
+- Privacy and compliance by design.
+- Immutable records for accountability.
+
+---
+
+## License
+
+Uhhh, IDK, it's mine lol?
+
+
+
+
+              \
+               \
+                \\
+                 \\
+                  >\/7
+              _.-(6'  \
+             (=___._/` \
+                  )  \ |
+                 /   / |
+                /    > /
+               j    < _\
+           _.-' :      ``.
+           \ r=._\        `.
+          <`\\_  \         .`-.
+           \ r-7  `-. ._  ' .  `\
+            \`,      `-.`7  7)   )
+             \/         \|  \'  / `-._
+                        ||    .'
+                         \\  (
+                          >\  >
+                      ,.-' >.'
+                     <.'_.''
+                       <'

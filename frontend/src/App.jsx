@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import Navbar from './components/Navbar'
 import Footer from './components/Footer'
 import FaultyTerminal from './components/FaultyTerminal'
+import ASCIIText from './components/ASCIIText'
 import { useAppAuth } from './context/AuthProvider'
 
 const Dashboard = lazy(() => import('./routes/Dashboard'))
@@ -17,22 +18,6 @@ function ProtectedRoute({ children, adminOnly = false }) {
   if (!isAuthenticated) return <Navigate to="/" replace />
   if (adminOnly && !isAdmin) return <Navigate to="/dashboard" replace />
   return children
-}
-
-function AsciiTitle() {
-  return (
-    <pre className="font-mono text-[10px] leading-tight text-zinc-100 md:text-xs">
-      {String.raw`
-  _____                         _       _                 _            _   
- / ____|                       (_)     | |               | |          | |  
-| (___  _   _ _ __   ___ _ __  _ _ __ | |_ ___ _ __   __| | ___ _ __ | |_ 
- \___ \| | | | '_ \ / _ \ '_ \| | '_ \| __/ _ \ '_ \ / _  |/ _ \ '_ \| __|
- ____) | |_| | |_) |  __/ | | | | | | | ||  __/ | | | (_| |  __/ | | | |_ 
-|_____/ \__,_| .__/ \___|_| |_|_|_| |_|\__\___|_| |_|\__,_|\___|_| |_|\__|
-             | |                                                            
-             |_|                                                            `}
-    </pre>
-  )
 }
 
 function Landing() {
@@ -57,7 +42,9 @@ function Landing() {
         />
       </div>
       <section className="panel relative z-10 w-full max-w-3xl rounded-2xl border border-crimson/40 p-8 text-center">
-        <AsciiTitle />
+        <div className="relative mx-auto mb-3 h-28 w-full max-w-2xl overflow-hidden">
+          <ASCIIText text="Superintendent" asciiFontSize={8} textFontSize={180} planeBaseHeight={8} enableWaves />
+        </div>
         <h1 className="mt-3 font-display text-4xl tracking-wide text-white">Superintendent</h1>
         <p className="mx-auto mt-3 max-w-xl text-sm text-zinc-300">
           Civic intelligence that watches quietly, reasons clearly, and logs decisions immutably.

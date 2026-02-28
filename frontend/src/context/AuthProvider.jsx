@@ -7,6 +7,8 @@ const AuthContext = createContext(null)
 const authDomain = import.meta.env.VITE_AUTH0_DOMAIN || ''
 const authClientId = import.meta.env.VITE_AUTH0_CLIENT_ID || ''
 const authAudience = import.meta.env.VITE_AUTH0_AUDIENCE || ''
+const authRedirectURI = import.meta.env.VITE_AUTH0_REDIRECT_URI || window.location.origin
+const authLogoutURI = import.meta.env.VITE_AUTH0_LOGOUT_URI || window.location.origin
 const roleClaimKey = import.meta.env.VITE_AUTH0_ROLE_CLAIM || 'https://superintendent/roles'
 const hasAuth = Boolean(authDomain && authClientId)
 
@@ -36,7 +38,7 @@ function AuthBridge({ children }) {
       roleLabel: isAdmin ? 'admin' : roles[0] || 'viewer',
       isAdmin,
       login: () => loginWithRedirect(),
-      logout: () => logout({ logoutParams: { returnTo: window.location.origin } }),
+      logout: () => logout({ logoutParams: { returnTo: authLogoutURI } }),
       getToken: () => getAccessTokenSilently(),
     }),
     [isLoading, isAuthenticated, user, roles, isAdmin, loginWithRedirect, logout, getAccessTokenSilently],
@@ -77,7 +79,7 @@ export function AppAuthProvider({ children }) {
       domain={authDomain}
       clientId={authClientId}
       authorizationParams={{
-        redirect_uri: window.location.origin,
+        redirect_uri: authRedirectURI,
         audience: authAudience || undefined,
       }}
     >

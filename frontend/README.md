@@ -17,6 +17,8 @@ React + Vite client for The Superintendent.
 - `VITE_AUTH0_DOMAIN`
 - `VITE_AUTH0_CLIENT_ID`
 - `VITE_AUTH0_AUDIENCE`
+- `VITE_AUTH0_REDIRECT_URI` (optional, default: current origin)
+- `VITE_AUTH0_LOGOUT_URI` (optional, default: current origin)
 - `VITE_AUTH0_ROLE_CLAIM` (optional, default: `https://superintendent/roles`)
 
 If Auth0 env vars are omitted, frontend runs in local dev-admin mode and uses `Bearer dev`.

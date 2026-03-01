@@ -147,7 +147,7 @@ SUPER_API=http://your-backend:8000 EDGE_ID=pi-001 ./edge
 - `GET /api/cities/search?q=` - global city lookup.
 - `GET /api/session/city` and `POST /api/session/city` - active city per user session.
 - `GET /api/feeds/public` - city-scoped live public feeds (weather, seismic, official civic links).
-- `POST /api/chat/thread` and `GET /api/chat/threads` - chat thread lifecycle.
+- `POST /api/chat/thread`, `GET /api/chat/threads`, and `DELETE /api/chat/thread/:id` - chat thread lifecycle.
 - `GET /api/chat/thread/:id/messages` and `POST /api/chat/thread/:id/message` - persisted operator chat.
 
 ---

@@ -471,23 +471,60 @@ func (h *Handlers) fetchNYC311Count(ctx context.Context) (int, error) {
 }
 
 func (h *Handlers) officialCityLinks(city models.CitySelection) []gin.H {
-	links := []gin.H{
-		{
-			"label": "Open data portal search",
-			"url":   fmt.Sprintf("https://www.google.com/search?q=%s+official+open+data+portal", url.QueryEscape(city.CityName)),
+	registry := map[string][]gin.H{
+		"new york|US": {
+			{"label": "NYC Open Data", "url": "https://opendata.cityofnewyork.us/"},
+			{"label": "NYC DOT Traffic Cameras", "url": "https://nyctmc.org/cameras"},
+			{"label": "NYC Emergency Management", "url": "https://www.nyc.gov/site/em/index.page"},
 		},
-		{
-			"label": "Emergency management search",
-			"url":   fmt.Sprintf("https://www.google.com/search?q=%s+official+emergency+management", url.QueryEscape(city.CityName)),
+		"los angeles|US": {
+			{"label": "LA Open Data", "url": "https://data.lacity.org/"},
+			{"label": "LADOT Traffic Info", "url": "https://ladot.lacity.gov/"},
+			{"label": "LAFD Alerts", "url": "https://www.lafd.org/alerts"},
+		},
+		"chicago|US": {
+			{"label": "Chicago Data Portal", "url": "https://data.cityofchicago.org/"},
+			{"label": "Chicago OEMC", "url": "https://www.chicago.gov/city/en/depts/oem.html"},
+		},
+		"london|GB": {
+			{"label": "London Datastore", "url": "https://data.london.gov.uk/"},
+			{"label": "TfL Status", "url": "https://tfl.gov.uk/tube-dlr-overground/status/"},
+			{"label": "London Resilience", "url": "https://www.london.gov.uk/programmes-strategies/london-resilience"},
+		},
+		"paris|FR": {
+			{"label": "Paris Open Data", "url": "https://opendata.paris.fr/"},
+			{"label": "Prefecture de Police Alerts", "url": "https://www.prefecturedepolice.interieur.gouv.fr/"},
+		},
+		"tokyo|JP": {
+			{"label": "Tokyo Open Data", "url": "https://portal.data.metro.tokyo.lg.jp/"},
+			{"label": "Tokyo Disaster Prevention", "url": "https://www.bousai.metro.tokyo.lg.jp/"},
+		},
+		"seoul|KR": {
+			{"label": "Seoul Open Data Plaza", "url": "https://data.seoul.go.kr/"},
+			{"label": "Seoul Disaster Safety", "url": "https://safecity.seoul.go.kr/"},
+		},
+		"singapore|SG": {
+			{"label": "Data.gov.sg", "url": "https://data.gov.sg/"},
+			{"label": "LTA Traffic Updates", "url": "https://www.lta.gov.sg/content/ltagov/en/map/traffic-news.html"},
+		},
+		"sydney|AU": {
+			{"label": "NSW Open Data", "url": "https://www.nsw.gov.au/departments-and-agencies/dcs/open-data"},
+			{"label": "Transport NSW Live Traffic", "url": "https://www.livetraffic.com/"},
+		},
+		"toronto|CA": {
+			{"label": "Toronto Open Data", "url": "https://open.toronto.ca/"},
+			{"label": "Toronto Emergency", "url": "https://www.toronto.ca/community-people/public-safety-alerts/emergency-preparedness/"},
 		},
 	}
-	if strings.EqualFold(city.CountryCode, "US") && strings.Contains(strings.ToLower(city.CityName), "new york") {
-		links = append(links,
-			gin.H{"label": "NYC Open Data", "url": "https://opendata.cityofnewyork.us/"},
-			gin.H{"label": "NYC DOT Traffic Cameras", "url": "https://nyctmc.org/cameras"},
-		)
+	key := fmt.Sprintf("%s|%s", strings.ToLower(strings.TrimSpace(city.CityName)), strings.ToUpper(strings.TrimSpace(city.CountryCode)))
+	if links, ok := registry[key]; ok {
+		return links
 	}
-	return links
+	return []gin.H{
+		{"label": "OpenStreetMap", "url": "https://www.openstreetmap.org/"},
+		{"label": "Open-Meteo", "url": "https://open-meteo.com/"},
+		{"label": "USGS Earthquake Feed", "url": "https://earthquake.usgs.gov/earthquakes/feed/"},
+	}
 }
 
 func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
@@ -603,6 +640,16 @@ func (h *Handlers) SetSessionCity(c *gin.Context) {
 func (h *Handlers) CreateChatThread(c *gin.Context) {
 	principalID := h.getPrincipalID(c)
 	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	if qCityID := strings.TrimSpace(c.Query("city_id")); qCityID != "" && qCityID != activeCity.CityID {
+		activeCity = models.CitySelection{
+			CityID:      qCityID,
+			CityName:    strings.TrimSpace(c.Query("city_name")),
+			CountryCode: strings.TrimSpace(c.Query("country_code")),
+		}
+		if activeCity.CityName == "" {
+			activeCity.CityName = "Active City"
+		}
+	}
 	var req struct {
 		Title string `json:"title"`
 	}
@@ -630,11 +677,38 @@ func (h *Handlers) CreateChatThread(c *gin.Context) {
 	c.JSON(http.StatusOK, thread)
 }
 
+func (h *Handlers) DeleteChatThread(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	threadID := strings.TrimSpace(c.Param("id"))
+	if threadID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "thread id is required"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+	delThread, err := db.ChatThreadsCol.DeleteOne(ctx, bson.M{"id": threadID, "principal_id": principalID})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete thread"})
+		return
+	}
+	if delThread.DeletedCount == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread not found"})
+		return
+	}
+	delMsgs, _ := db.ChatMessagesCol.DeleteMany(ctx, bson.M{"thread_id": threadID})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "deleted_messages": delMsgs.DeletedCount})
+}
+
 func (h *Handlers) ListChatThreads(c *gin.Context) {
 	principalID := h.getPrincipalID(c)
+	cityID := strings.TrimSpace(c.Query("city_id"))
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
-	cur, err := db.ChatThreadsCol.Find(ctx, bson.M{"principal_id": principalID}, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}).SetLimit(50))
+	filter := bson.M{"principal_id": principalID}
+	if cityID != "" {
+		filter["city_id"] = cityID
+	}
+	cur, err := db.ChatThreadsCol.Find(ctx, filter, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}).SetLimit(50))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list threads"})
 		return
@@ -713,10 +787,13 @@ func (h *Handlers) PostChatMessage(c *gin.Context) {
 	for i := len(recent) - 1; i >= 0; i-- {
 		msgs = append(msgs, fmt.Sprintf("%s: %s", recent[i].Role, recent[i].Content))
 	}
-	aiText, err := h.ai.Chat(ctx, thread.CityName, msgs, userMsg.Content)
+	cityName := strings.TrimSpace(thread.CityName)
+	if cityName == "" {
+		cityName = "Active City"
+	}
+	aiText, err := h.ai.Chat(ctx, cityName, msgs, userMsg.Content)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
-		return
+		aiText = h.localChatFallback(ctx, thread.CityID, cityName, userMsg.Content)
 	}
 	assistant := models.ChatMessage{
 		ID:        h.newID("msg"),
@@ -731,6 +808,19 @@ func (h *Handlers) PostChatMessage(c *gin.Context) {
 	}
 	_, _ = db.ChatThreadsCol.UpdateOne(ctx, bson.M{"id": threadID, "principal_id": principalID}, bson.M{"$set": bson.M{"updated_at": assistant.CreatedAt}})
 	c.JSON(http.StatusOK, gin.H{"user": userMsg, "assistant": assistant})
+}
+
+func (h *Handlers) localChatFallback(ctx context.Context, cityID, cityName, userInput string) string {
+	summaries := h.getRecentDecisionSummaries(ctx, cityID, 2)
+	if len(summaries) == 0 {
+		return fmt.Sprintf("Monitoring %s in local mode. I can help with operational checklists and triage, but deeper AI analysis is currently unavailable. Start with: verify telemetry freshness, check transport chokepoints, and validate emergency comms readiness.", cityName)
+	}
+	return fmt.Sprintf(
+		"Local mode response for %s: recent advisory says \"%s\". Based on your request (\"%s\"), prioritize one conservative step and one aggressive step, then reassess in 10-15 minutes.",
+		cityName,
+		firstN(summaries[0], 180),
+		firstN(strings.TrimSpace(userInput), 120),
+	)
 }
 
 func (h *Handlers) getRecentDecisionSummaries(ctx context.Context, cityID string, limit int64) []string {
@@ -806,4 +896,11 @@ func (h *Handlers) cityFilter(cityID string) bson.M {
 		return bson.M{"$or": []bson.M{{"city_id": cityID}, {"city_id": bson.M{"$exists": false}}}}
 	}
 	return bson.M{"city_id": cityID}
+}
+
+func firstN(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
 }

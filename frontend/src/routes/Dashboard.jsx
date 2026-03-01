@@ -6,6 +6,7 @@ import RiskGauge from '../components/RiskGauge'
 import SystemMoodOrb from '../components/SystemMoodOrb'
 import {
   createChatThread,
+  deleteChatThread,
   getChatMessages,
   getLogs,
   getPublicFeeds,
@@ -17,6 +18,7 @@ import {
   sendChatMessage,
   setSessionCity,
 } from '../context/appApi'
+import { getErrorMessage } from '../context/apiClient'
 import { useAppState } from '../context/useAppState'
 import { useFetch } from '../hooks/useFetch'
 
@@ -29,6 +31,8 @@ export default function Dashboard() {
   const [messages, setMessages] = useState([])
   const [messageInput, setMessageInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
+  const [chatError, setChatError] = useState('')
+  const [cityError, setCityError] = useState('')
 
   const summary = useAppState((s) => s.summary)
   const risk = useAppState((s) => s.risk)
@@ -42,15 +46,17 @@ export default function Dashboard() {
 
   useEffect(() => {
     let mounted = true
+    let initialCity = null
     ;(async () => {
       try {
         const city = await getSessionCity()
+        initialCity = city
         if (mounted) setActiveCity(city)
       } catch {
         // ignore
       }
       try {
-        const list = await listChatThreads()
+        const list = await listChatThreads(initialCity)
         if (!mounted) return
         setThreads(list)
         if (list[0]) setActiveThread(list[0])
@@ -62,6 +68,25 @@ export default function Dashboard() {
       mounted = false
     }
   }, [])
+
+  useEffect(() => {
+    if (!activeCity?.city_id) return
+    let mounted = true
+    ;(async () => {
+      try {
+        const list = await listChatThreads(activeCity)
+        if (!mounted) return
+        setThreads(list)
+        setActiveThread(list[0] || null)
+        setMessages([])
+      } catch (err) {
+        if (mounted) setChatError(getErrorMessage(err))
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [activeCity?.city_id])
 
   useEffect(() => {
     if (!stateQuery.data) return
@@ -103,19 +128,33 @@ export default function Dashboard() {
 
   async function onSearchCity() {
     if (cityQuery.trim().length < 2) return
-    const list = await searchCities(cityQuery.trim())
-    setCityResults(list)
+    setCityError('')
+    try {
+      const list = await searchCities(cityQuery.trim())
+      setCityResults(list)
+    } catch (err) {
+      setCityError(getErrorMessage(err))
+    }
   }
 
   async function onSelectCity(city) {
-    const saved = await setSessionCity(city)
-    setActiveCity(saved)
-    setCityResults([])
-    await Promise.all([stateQuery.refresh(), telemetryQuery.refresh(), logsQuery.refresh()])
+    setCityError('')
+    try {
+      const saved = await setSessionCity(city)
+      setActiveCity(saved)
+      setCityResults([])
+      await Promise.all([stateQuery.refresh(), telemetryQuery.refresh(), logsQuery.refresh(), feedsQuery.refresh()])
+      setTimeout(() => {
+        void Promise.all([stateQuery.refresh(), telemetryQuery.refresh(), logsQuery.refresh(), feedsQuery.refresh()])
+      }, 1800)
+    } catch (err) {
+      setCityError(getErrorMessage(err))
+    }
   }
 
   async function onCreateThread() {
-    const thread = await createChatThread(`${activeCity?.city_name || 'City'} Ops`)
+    setChatError('')
+    const thread = await createChatThread(`${activeCity?.city_name || 'City'} Ops`, activeCity)
     const list = [thread, ...threads]
     setThreads(list)
     setActiveThread(thread)
@@ -123,16 +162,41 @@ export default function Dashboard() {
 
   async function onSend() {
     const content = messageInput.trim()
-    if (!content || !activeThread?.id || chatBusy) return
+    if (!content || chatBusy) return
     setChatBusy(true)
+    setChatError('')
     setMessageInput('')
     try {
-      const resp = await sendChatMessage(activeThread.id, content)
+      let thread = activeThread
+      if (!thread?.id) {
+        thread = await createChatThread(`${activeCity?.city_name || 'City'} Ops`, activeCity)
+        setThreads((prev) => [thread, ...prev])
+        setActiveThread(thread)
+      }
+      const resp = await sendChatMessage(thread.id, content)
       setMessages((prev) => [...prev, resp.user, resp.assistant])
-      const refreshed = await listChatThreads()
+      const refreshed = await listChatThreads(activeCity)
       setThreads(refreshed)
+    } catch (err) {
+      setChatError(getErrorMessage(err))
     } finally {
       setChatBusy(false)
+    }
+  }
+
+  async function onDeleteThread(threadId) {
+    if (!threadId) return
+    setChatError('')
+    try {
+      await deleteChatThread(threadId)
+      const nextThreads = threads.filter((t) => t.id !== threadId)
+      setThreads(nextThreads)
+      if (activeThread?.id === threadId) {
+        setActiveThread(nextThreads[0] || null)
+        setMessages([])
+      }
+    } catch (err) {
+      setChatError(getErrorMessage(err))
     }
   }
 
@@ -170,6 +234,7 @@ export default function Dashboard() {
               ))}
             </div>
           )}
+          {cityError && <p className="mt-2 text-xs text-red-400">{cityError}</p>}
         </div>
         <div className="panel rounded-xl p-3">
           <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} />
@@ -190,15 +255,23 @@ export default function Dashboard() {
           </div>
           <div className="mb-2 flex gap-2 overflow-auto">
             {threads.map((thread) => (
-              <button
+              <div
                 key={thread.id}
-                onClick={() => setActiveThread(thread)}
-                className={`rounded px-2 py-1 text-xs ${
-                  activeThread?.id === thread.id ? 'bg-crimson text-white' : 'border border-zinc-700 text-zinc-300'
+                className={`flex items-center gap-1 rounded px-2 py-1 text-xs ${
+                  activeThread?.id === thread.id ? 'bg-crimson/90 text-white' : 'border border-zinc-700 text-zinc-300'
                 }`}
               >
-                {thread.title}
-              </button>
+                <button onClick={() => setActiveThread(thread)} className="text-left">
+                  {thread.title}
+                </button>
+                <button
+                  onClick={() => onDeleteThread(thread.id)}
+                  className="rounded px-1 text-[10px] text-zinc-200/80 hover:bg-black/20 hover:text-white"
+                  title="Delete thread"
+                >
+                  x
+                </button>
+              </div>
             ))}
           </div>
           <div className="mb-2 h-44 overflow-auto rounded border border-zinc-800 bg-black/40 p-2 text-sm">
@@ -213,6 +286,7 @@ export default function Dashboard() {
               ))
             )}
           </div>
+          {chatError && <p className="mb-2 text-xs text-red-400">{chatError}</p>}
           <div className="flex gap-2">
             <input
               value={messageInput}
@@ -225,7 +299,7 @@ export default function Dashboard() {
             />
             <button
               onClick={onSend}
-              disabled={chatBusy || !activeThread}
+              disabled={chatBusy}
               className="rounded bg-crimson px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
             >
               {chatBusy ? '...' : 'Send'}

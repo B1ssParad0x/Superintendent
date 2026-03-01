@@ -65,7 +65,7 @@ func (c *Client) Reason(ctx context.Context, cityName, telemetrySummary string, 
 
 func (c *Client) Chat(ctx context.Context, cityName string, recentMessages []string, userInput string) (string, error) {
 	if !c.Enabled() {
-		return "AI chat is not configured. Add GEMINI_API_KEY.", nil
+		return "", fmt.Errorf("chat model unavailable")
 	}
 	prompt := buildChatPrompt(cityName, recentMessages, userInput)
 	return c.generate(ctx, prompt)

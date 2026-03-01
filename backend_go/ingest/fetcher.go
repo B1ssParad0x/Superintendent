@@ -18,6 +18,7 @@ import (
 const (
 	nyc311URL      = "https://data.cityofnewyork.us/resource/fhrw-4uyv.json"
 	openWeatherURL = "https://api.openweathermap.org/data/2.5/weather"
+	openMeteoURL   = "https://api.open-meteo.com/v1/forecast"
 )
 
 // Run fetches NYC 311 and OpenWeather data, merges into metrics, and stores as telemetry
@@ -45,6 +46,13 @@ func RunForCity(ctx context.Context, cfg *config.Config, city models.CitySelecti
 				metrics[k] = v
 			}
 		}
+	} else {
+		weather, err := fetchOpenMeteo(ctx, loc.Lat, loc.Lon)
+		if err == nil {
+			for k, v := range weather {
+				metrics[k] = v
+			}
+		}
 	}
 
 	if strings.EqualFold(city.CountryCode, "US") && strings.Contains(strings.ToLower(city.CityName), "new york") {
@@ -55,13 +63,10 @@ func RunForCity(ctx context.Context, cfg *config.Config, city models.CitySelecti
 		}
 	}
 
-	if len(metrics) == 0 {
-		return nil
-	}
-
 	metrics["timestamp"] = ts
 	metrics["city_name"] = city.CityName
 	metrics["country_code"] = city.CountryCode
+	metrics["ingest_heartbeat"] = 1
 	doc := models.Telemetry{
 		NodeID:      "api-ingest-001",
 		Ts:          time.Unix(ts, 0),
@@ -161,4 +166,47 @@ func fetchNYC311(ctx context.Context, _ time.Duration) ([]map[string]interface{}
 		return nil, err
 	}
 	return complaints, nil
+}
+
+func fetchOpenMeteo(ctx context.Context, lat, lon float64) (map[string]interface{}, error) {
+	u, _ := url.Parse(openMeteoURL)
+	q := u.Query()
+	q.Set("latitude", fmt.Sprintf("%.4f", lat))
+	q.Set("longitude", fmt.Sprintf("%.4f", lon))
+	q.Set("current", "temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code")
+	q.Set("timezone", "auto")
+	u.RawQuery = q.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("open-meteo: %s", resp.Status)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var data struct {
+		Current struct {
+			TempC       float64 `json:"temperature_2m"`
+			Humidity    float64 `json:"relative_humidity_2m"`
+			WindSpeed   float64 `json:"wind_speed_10m"`
+			WeatherCode int     `json:"weather_code"`
+		} `json:"current"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"temp_c":          data.Current.TempC,
+		"humidity":        data.Current.Humidity,
+		"wind_speed":      data.Current.WindSpeed,
+		"weather_code":    data.Current.WeatherCode,
+		"weather_provider": "open-meteo",
+	}, nil
 }

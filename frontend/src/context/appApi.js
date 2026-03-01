@@ -86,13 +86,15 @@ export async function setSessionCity(city) {
   return data
 }
 
-export async function listChatThreads() {
-  const { data } = await api.get('/api/chat/threads')
+export async function listChatThreads(city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.get('/api/chat/threads', { params })
   return data?.threads || []
 }
 
-export async function createChatThread(title = '') {
-  const { data } = await api.post('/api/chat/thread', { title })
+export async function createChatThread(title = '', city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.post('/api/chat/thread', { title }, { params })
   return data
 }
 
@@ -103,6 +105,11 @@ export async function getChatMessages(threadId) {
 
 export async function sendChatMessage(threadId, content) {
   const { data } = await api.post(`/api/chat/thread/${encodeURIComponent(threadId)}/message`, { content })
+  return data
+}
+
+export async function deleteChatThread(threadId) {
+  const { data } = await api.delete(`/api/chat/thread/${encodeURIComponent(threadId)}`)
   return data
 }
 

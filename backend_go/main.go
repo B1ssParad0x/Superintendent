@@ -65,6 +65,7 @@ func main() {
 		user.GET("/cities/search", h.SearchCities)
 		user.GET("/feeds/public", h.PublicFeeds)
 		user.POST("/chat/thread", h.CreateChatThread)
+		user.DELETE("/chat/thread/:id", h.DeleteChatThread)
 		user.GET("/chat/threads", h.ListChatThreads)
 		user.GET("/chat/thread/:id/messages", h.GetChatMessages)
 		user.POST("/chat/thread/:id/message", h.PostChatMessage)

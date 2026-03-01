@@ -78,7 +78,11 @@ func main() {
 	}
 
 	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
+		interval := time.Duration(cfg.IngestIntervalSec) * time.Second
+		if interval < 15*time.Second {
+			interval = 15 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		for range ticker.C {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			if err := ingest.Run(ctx, cfg); err != nil {

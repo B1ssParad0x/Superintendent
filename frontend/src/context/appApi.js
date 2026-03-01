@@ -44,8 +44,8 @@ function inferRisk(summary = '') {
   return 35
 }
 
-export async function getNodes() {
-  const telemetry = await getTelemetry()
+export async function getNodes(city) {
+  const telemetry = await getTelemetry(city)
   const byNode = new Map()
   for (const point of telemetry) {
     const existing = byNode.get(point.node_id)
@@ -61,11 +61,14 @@ export async function getNodes() {
       ts: node.ts,
       loc: node.loc,
       metrics: node.metrics || {},
+      city_name: node.city_name,
+      country_code: node.country_code,
       healthy,
       heartbeat: healthy ? 'healthy' : ageMs < 15 * 60 * 1000 ? 'degraded' : 'stale',
       risk: inferRisk(JSON.stringify(node.metrics || {})),
+      age_min: Math.max(0, Math.round(ageMs / 60000)),
     }
-  })
+  }).sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
 }
 
 export async function searchCities(query) {

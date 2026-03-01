@@ -23,6 +23,7 @@ type Config struct {
 	OpenWeatherKey string
 	IngestLat      float64
 	IngestLon      float64
+	IngestIntervalSec int
 	EdgePubkeys    map[string][]byte
 }
 
@@ -43,6 +44,7 @@ func Load() *Config {
 		OpenWeatherKey: getEnv("OPENWEATHER_KEY", ""),
 		IngestLat:      parseFloat(getEnv("INGEST_LAT", "40.7128"), 40.7128),
 		IngestLon:      parseFloat(getEnv("INGEST_LON", "-74.006"), -74.006),
+		IngestIntervalSec: parseInt(getEnv("INGEST_INTERVAL_SEC", "60"), 60),
 		EdgePubkeys:    parseEdgePubkeys(getEnv("EDGE_PUBKEYS", "")),
 	}
 }

@@ -8,7 +8,7 @@ import os
 import time
 from typing import Any
 
-import google.generativeai as genai
+from google import genai
 from fastapi import FastAPI
 from pydantic import BaseModel
 import httpx
@@ -19,11 +19,11 @@ load_dotenv()
 app = FastAPI(title="Superintendent AI Worker")
 
 GEMINI_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 ELEVEN_KEY = os.getenv("ELEVEN_API_KEY", "")
 ELEVEN_VOICE = os.getenv("ELEVEN_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
 
-if GEMINI_KEY:
-    genai.configure(api_key=GEMINI_KEY)
+GENAI_CLIENT = genai.Client(api_key=GEMINI_KEY) if GEMINI_KEY else None
 
 
 class ReasonRequest(BaseModel):
@@ -99,10 +99,8 @@ async def reason(req: ReasonRequest) -> ReasonResponse:
         )
 
     prompt = REASON_PROMPT.format(telemetry_summary=req.telemetry_summary or "No data provided.")
-    model = genai.GenerativeModel("gemini-1.5-flash")
-    response = model.generate_content(prompt)
-
-    text = response.text.strip()
+    response = GENAI_CLIENT.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+    text = (response.text or "").strip()
     # Extract JSON from markdown code block if present
     if "```json" in text:
         text = text.split("```json")[1].split("```")[0].strip()

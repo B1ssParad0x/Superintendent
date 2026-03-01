@@ -79,6 +79,7 @@ Copy `.env.example` to `.env` and configure:
 | `SOLANA_RPC` | Solana RPC URL (default: devnet) |
 | `EDGE_API_KEY` | Shared secret for edge ingest (optional) |
 | `MAPBOX_TOKEN` | Mapbox token for dashboard map |
+| `INGEST_INTERVAL_SEC` | Seconds between background ingest runs (default: `60`, minimum effective `15`) |
 
 **Dev mode:** Without Auth0 configured, the frontend runs in dev mode and the backend accepts `Bearer dev` for admin routes.
 

@@ -62,7 +62,7 @@ export default function Nodes() {
           <p className="rounded border border-amber-700/40 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">Degraded: {stats.degraded}</p>
           <p className="rounded border border-zinc-700/40 bg-zinc-900/30 px-3 py-2 text-xs text-zinc-300">Stale: {stats.stale}</p>
         </div>
-        <MapView telemetry={telemetryQuery.data || []} nodes={nodesQuery.data || []} />
+        <MapView telemetry={telemetryQuery.data || []} nodes={nodesQuery.data || []} city={activeCity} />
         {telemetryQuery.error && <p className="mt-2 text-xs text-red-400">{telemetryQuery.error}</p>}
       </section>
       <section className="space-y-3">

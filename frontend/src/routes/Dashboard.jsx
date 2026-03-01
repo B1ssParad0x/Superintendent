@@ -282,7 +282,7 @@ export default function Dashboard() {
           {cityError && <p className="mt-2 text-xs text-red-400">{cityError}</p>}
         </div>
         <div className="panel rounded-xl p-3">
-          <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} />
+          <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} city={activeCity} />
         </div>
         <AdvisoryCard
           summary={advisorySummary}

@@ -15,9 +15,10 @@ function featureCollection(points) {
   }
 }
 
-export default function MapView({ telemetry = [], nodes = [] }) {
+export default function MapView({ telemetry = [], nodes = [], city = null }) {
   const mapRef = useRef(null)
   const containerRef = useRef(null)
+  const lastCityRef = useRef('')
   const [mapError, setMapError] = useState('')
   const token = import.meta.env.VITE_MAPBOX_TOKEN || ''
   const hasPublicToken = token.startsWith('pk.')
@@ -29,11 +30,13 @@ export default function MapView({ telemetry = [], nodes = [] }) {
     container.innerHTML = ''
 
     try {
+      const hasCityCoords = Number.isFinite(Number(city?.lon)) && Number.isFinite(Number(city?.lat))
+      const initialCenter = hasCityCoords ? [Number(city.lon), Number(city.lat)] : [-74.006, 40.7128]
       mapboxgl.accessToken = token
       mapRef.current = new mapboxgl.Map({
         container,
         style: 'mapbox://styles/mapbox/dark-v11',
-        center: [-74.006, 40.7128],
+        center: initialCenter,
         zoom: 10,
       })
     } catch (err) {
@@ -83,6 +86,22 @@ export default function MapView({ telemetry = [], nodes = [] }) {
       }
     }
   }, [hasPublicToken, token])
+
+  useEffect(() => {
+    const map = mapRef.current
+    const cityID = city?.city_id || ''
+    const hasCoords = Number.isFinite(Number(city?.lon)) && Number.isFinite(Number(city?.lat))
+    if (!map || !cityID || !hasCoords) return
+    if (lastCityRef.current === cityID) return
+    lastCityRef.current = cityID
+    map.flyTo({
+      center: [Number(city.lon), Number(city.lat)],
+      zoom: 10,
+      essential: true,
+      speed: 0.8,
+      curve: 1.2,
+    })
+  }, [city?.city_id, city?.lat, city?.lon])
 
   useEffect(() => {
     const map = mapRef.current

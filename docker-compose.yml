@@ -22,12 +22,18 @@ services:
       - MONGO_URI=mongodb://mongo:27017
       - AUTH0_DOMAIN=${AUTH0_DOMAIN}
       - AUTH0_AUDIENCE=${AUTH0_AUDIENCE}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.5-flash}
+      - GEMINI_TIMEOUT_SEC=${GEMINI_TIMEOUT_SEC:-20}
       - SOLANA_RPC=${SOLANA_RPC:-https://api.devnet.solana.com}
       - SOLANA_KEYPAIR_JSON=${SOLANA_KEYPAIR_JSON}
       - AI_WORKER_URL=http://ai_worker_py:8001
       - EDGE_API_KEY=${EDGE_API_KEY}
       - HOST_URL=${HOST_URL:-http://localhost:8000}
       - OPENWEATHER_KEY=${OPENWEATHER_KEY}
+      - INGEST_LAT=${INGEST_LAT:-40.7128}
+      - INGEST_LON=${INGEST_LON:--74.006}
+      - INGEST_INTERVAL_SEC=${INGEST_INTERVAL_SEC:-60}
     depends_on:
       - mongo
       - ai_worker_py

@@ -20,6 +20,7 @@ export default function Logs() {
   const [node, setNode] = useState('all')
   const [tx, setTx] = useState('all')
   const [query, setQuery] = useState('')
+  const rows = Array.isArray(data) ? data : []
 
   useEffect(() => {
     let mounted = true
@@ -38,15 +39,15 @@ export default function Logs() {
 
   const nodes = useMemo(() => {
     const names = new Set()
-    data.forEach((d) => {
+    rows.forEach((d) => {
       const match = d.summary?.match(/node[\s:-]+([a-zA-Z0-9-_]+)/i)
       if (match?.[1]) names.add(match[1])
     })
     return Array.from(names)
-  }, [data])
+  }, [rows])
 
   const filtered = useMemo(() => {
-    return data.filter((entry) => {
+    return rows.filter((entry) => {
       const byRisk = risk === 'all' ? true : riskFromSummary(entry.summary) === risk
       const byDate = date ? new Date(entry.when).toDateString() === new Date(date).toDateString() : true
       const nodeMatch = entry.summary?.match(/node[\s:-]+([a-zA-Z0-9-_]+)/i)?.[1]
@@ -55,15 +56,15 @@ export default function Logs() {
       const byQuery = query.trim() ? entry.summary?.toLowerCase().includes(query.trim().toLowerCase()) : true
       return byRisk && byDate && byNode && byTx && byQuery
     })
-  }, [data, risk, date, node, tx, query])
+  }, [rows, risk, date, node, tx, query])
 
   const totals = useMemo(() => {
     return {
-      total: data.length,
-      committed: data.filter((x) => Boolean(x.solana_tx)).length,
-      withAudio: data.filter((x) => Boolean(x.audio_url)).length,
+      total: rows.length,
+      committed: rows.filter((x) => Boolean(x.solana_tx)).length,
+      withAudio: rows.filter((x) => Boolean(x.audio_url)).length,
     }
-  }, [data])
+  }, [rows])
 
   return (
     <main className="mx-auto max-w-7xl space-y-4 px-4 py-4">

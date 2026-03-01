@@ -140,10 +140,15 @@ func (h *Handlers) Reason(c *gin.Context) {
 		"summary":    resp.Summary,
 		"risk":       resp.Risk,
 		"actions":    resp.Actions,
+		"forecast":   resp.Forecast,
+		"confidence": resp.Confidence,
 		"audio_text": resp.AudioText,
 		"audio_url":  audioURL,
 		"explain":    resp.Explain,
 	})
+
+	// Persist the advisory so operators can see fresh AI guidance in logs/state.
+	_ = h.saveAdvisory(ctx, activeCity, resp, audioURL, "manual_reason")
 }
 
 // Commit handles POST /api/commit - admin only, hashes and submits to Solana
@@ -284,6 +289,22 @@ func (h *Handlers) Logs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"decisions": decisions})
+}
+
+func (h *Handlers) AIStatus(c *gin.Context) {
+	mode, lastErr, lastAt, configured, model := h.ai.Status()
+	status := "local"
+	if mode == "cloud_active" {
+		status = "cloud"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status":      status,
+		"mode":        mode,
+		"configured":  configured,
+		"model":       model,
+		"last_error":  firstN(lastErr, 280),
+		"last_checked": lastAt,
+	})
 }
 
 // PublicFeeds aggregates city-scoped public feeds from official/open providers.
@@ -632,7 +653,7 @@ func (h *Handlers) SetSessionCity(c *gin.Context) {
 	go func(city models.CitySelection) {
 		bg, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		_ = ingest.RunForCity(bg, h.cfg, city)
+		_ = h.RunCityCycle(bg, city)
 	}(req)
 	c.JSON(http.StatusOK, req)
 }
@@ -793,6 +814,7 @@ func (h *Handlers) PostChatMessage(c *gin.Context) {
 	}
 	aiText, err := h.ai.Chat(ctx, cityName, msgs, userMsg.Content)
 	if err != nil {
+		fmt.Printf("ai chat fallback for city=%s thread=%s: %v\n", cityName, threadID, err)
 		aiText = h.localChatFallback(ctx, thread.CityID, cityName, userMsg.Content)
 	}
 	assistant := models.ChatMessage{
@@ -821,6 +843,76 @@ func (h *Handlers) localChatFallback(ctx context.Context, cityID, cityName, user
 		firstN(summaries[0], 180),
 		firstN(strings.TrimSpace(userInput), 120),
 	)
+}
+
+// RunCityCycle ingests fresh city telemetry and writes a predictive advisory.
+func (h *Handlers) RunCityCycle(ctx context.Context, city models.CitySelection) error {
+	if err := ingest.RunForCity(ctx, h.cfg, city); err != nil {
+		return err
+	}
+	telemetrySummary, recentDecisions, err := h.cityReasonContext(ctx, city.CityID)
+	if err != nil {
+		return err
+	}
+	resp, err := h.ai.Reason(ctx, city.CityName, telemetrySummary, recentDecisions)
+	if err != nil {
+		return err
+	}
+	audioURL := ""
+	if resp.AudioText != "" && h.worker != nil {
+		audioURL, _ = h.worker.Speak(ctx, resp.AudioText)
+	}
+	return h.saveAdvisory(ctx, city, resp, audioURL, "auto_cycle")
+}
+
+func (h *Handlers) cityReasonContext(ctx context.Context, cityID string) (string, []string, error) {
+	cur, err := db.TelemetryCol.Find(ctx, h.cityFilter(cityID),
+		options.Find().SetSort(bson.D{{Key: "ts", Value: -1}}).SetLimit(12))
+	if err != nil {
+		return "", nil, err
+	}
+	var t []models.Telemetry
+	if err := cur.All(ctx, &t); err != nil {
+		return "", nil, err
+	}
+	summary := "No recent telemetry."
+	if len(t) > 0 {
+		b, _ := json.Marshal(t)
+		summary = string(b)
+	}
+	recentDecisions := h.getRecentDecisionSummaries(ctx, cityID, 5)
+	return summary, recentDecisions, nil
+}
+
+func (h *Handlers) saveAdvisory(ctx context.Context, city models.CitySelection, resp ai.ReasonResult, audioURL, source string) error {
+	if strings.TrimSpace(resp.Summary) == "" {
+		return nil
+	}
+	// Suppress duplicates when advisory text is unchanged in a short window.
+	var last models.Decision
+	if err := db.DecisionsCol.FindOne(ctx, h.cityFilter(city.CityID), options.FindOne().SetSort(bson.D{{Key: "when", Value: -1}})).Decode(&last); err == nil {
+		if strings.EqualFold(strings.TrimSpace(last.Summary), strings.TrimSpace(resp.Summary)) && time.Since(last.When) < 8*time.Minute {
+			return nil
+		}
+	}
+	doc := models.Decision{
+		When:        time.Now(),
+		Summary:     resp.Summary,
+		Hash:        auth.HashForSolana(resp.Summary + "|" + city.CityID + "|" + source),
+		AudioURL:    audioURL,
+		SolanaTx:    "",
+		Risk:        strings.ToLower(strings.TrimSpace(resp.Risk)),
+		Actions:     resp.Actions,
+		Forecast:    resp.Forecast,
+		Confidence:  resp.Confidence,
+		Explain:     resp.Explain,
+		Source:      source,
+		CityID:      city.CityID,
+		CityName:    city.CityName,
+		CountryCode: city.CountryCode,
+	}
+	_, err := db.DecisionsCol.InsertOne(ctx, doc)
+	return err
 }
 
 func (h *Handlers) getRecentDecisionSummaries(ctx context.Context, cityID string, limit int64) []string {

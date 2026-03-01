@@ -35,6 +35,12 @@ type Decision struct {
 	Hash        string    `json:"hash" bson:"hash"`
 	AudioURL    string    `json:"audio_url" bson:"audio_url"`
 	SolanaTx    string    `json:"solana_tx" bson:"solana_tx"`
+	Risk        string    `json:"risk,omitempty" bson:"risk,omitempty"`
+	Actions     map[string]string `json:"actions,omitempty" bson:"actions,omitempty"`
+	Forecast    string    `json:"forecast,omitempty" bson:"forecast,omitempty"`
+	Confidence  int       `json:"confidence,omitempty" bson:"confidence,omitempty"`
+	Explain     string    `json:"explain,omitempty" bson:"explain,omitempty"`
+	Source      string    `json:"source,omitempty" bson:"source,omitempty"`
 	CityID      string    `json:"city_id,omitempty" bson:"city_id,omitempty"`
 	CityName    string    `json:"city_name,omitempty" bson:"city_name,omitempty"`
 	CountryCode string    `json:"country_code,omitempty" bson:"country_code,omitempty"`

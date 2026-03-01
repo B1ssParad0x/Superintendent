@@ -7,6 +7,7 @@ import SystemMoodOrb from '../components/SystemMoodOrb'
 import {
   createChatThread,
   deleteChatThread,
+  getAIStatus,
   getChatMessages,
   getLogs,
   getPublicFeeds,
@@ -21,6 +22,15 @@ import {
 import { getErrorMessage } from '../context/apiClient'
 import { useAppState } from '../context/useAppState'
 import { useFetch } from '../hooks/useFetch'
+
+function riskToScore(riskLabel, fallback = 35) {
+  const risk = String(riskLabel || '').toLowerCase()
+  if (risk === 'critical') return 95
+  if (risk === 'high') return 82
+  if (risk === 'medium') return 58
+  if (risk === 'low') return 28
+  return fallback
+}
 
 export default function Dashboard() {
   const [activeCity, setActiveCity] = useState(null)
@@ -43,6 +53,7 @@ export default function Dashboard() {
   const telemetryQuery = useFetch(() => getTelemetry(activeCity), 12_000, [activeCity?.city_id])
   const logsQuery = useFetch(() => getLogs(activeCity), 20_000, [activeCity?.city_id])
   const feedsQuery = useFetch(() => getPublicFeeds(activeCity), 20_000, [activeCity?.city_id])
+  const aiStatusQuery = useFetch(getAIStatus, 30_000, [])
 
   useEffect(() => {
     let mounted = true
@@ -98,6 +109,7 @@ export default function Dashboard() {
   }, [stateQuery.data, logsQuery.data, setFromState])
 
   const latestAudio = useMemo(() => logsQuery.data?.find((x) => x.audio_url)?.audio_url, [logsQuery.data])
+  const latestDecision = useMemo(() => (logsQuery.data || [])[0] || null, [logsQuery.data])
   const tickerText = useMemo(() => {
     const text = (logsQuery.data || [])
       .slice(0, 12)
@@ -239,7 +251,13 @@ export default function Dashboard() {
         <div className="panel rounded-xl p-3">
           <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} />
         </div>
-        <AdvisoryCard summary={summary} risk={risk} actions={['Monitor transit corridors', 'Stage EMS', 'Broadcast advisory']} />
+        <AdvisoryCard
+          summary={latestDecision?.summary || summary}
+          risk={riskToScore(latestDecision?.risk, risk)}
+          actions={latestDecision?.actions || ['Monitor transit corridors', 'Stage EMS', 'Broadcast advisory']}
+          forecast={latestDecision?.forecast || ''}
+          confidence={typeof latestDecision?.confidence === 'number' ? latestDecision.confidence : null}
+        />
         <div className="panel overflow-hidden rounded-xl py-2">
           <div className="ticker-track whitespace-nowrap px-3 text-sm text-zinc-300">
             <span>{tickerText} &#8226; </span>
@@ -249,9 +267,21 @@ export default function Dashboard() {
         <section className="panel rounded-xl p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm uppercase tracking-widest text-zinc-400">Operator AI Chat</h3>
-            <button onClick={onCreateThread} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200">
-              New Thread
-            </button>
+            <div className="flex items-center gap-2">
+              <span
+                className={`rounded border px-2 py-1 text-[10px] uppercase tracking-widest ${
+                  aiStatusQuery.data?.status === 'cloud'
+                    ? 'border-emerald-600/50 bg-emerald-900/30 text-emerald-200'
+                    : 'border-amber-600/50 bg-amber-900/30 text-amber-200'
+                }`}
+                title={aiStatusQuery.data?.last_error || 'No recent AI error recorded.'}
+              >
+                AI {aiStatusQuery.data?.status === 'cloud' ? 'Cloud' : 'Local'}
+              </span>
+              <button onClick={onCreateThread} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200">
+                New Thread
+              </button>
+            </div>
           </div>
           <div className="mb-2 flex gap-2 overflow-auto">
             {threads.map((thread) => (
@@ -287,6 +317,12 @@ export default function Dashboard() {
             )}
           </div>
           {chatError && <p className="mb-2 text-xs text-red-400">{chatError}</p>}
+          {aiStatusQuery.data?.status !== 'cloud' && (
+            <p className="mb-2 text-xs text-amber-300">
+              Running in local fallback mode.
+              {aiStatusQuery.data?.last_error ? ` Last backend AI error: ${aiStatusQuery.data.last_error}` : ''}
+            </p>
+          )}
           <div className="flex gap-2">
             <input
               value={messageInput}

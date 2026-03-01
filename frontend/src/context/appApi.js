@@ -118,3 +118,8 @@ export async function getPublicFeeds(city) {
   const { data } = await api.get('/api/feeds/public', { params })
   return data
 }
+
+export async function getAIStatus() {
+  const { data } = await api.get('/api/ai/status')
+  return data
+}

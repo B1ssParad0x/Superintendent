@@ -71,7 +71,7 @@ Copy `.env.example` to `.env` and configure:
 | `AUTH0_CLIENT_ID` | SPA client ID |
 | `MONGO_URI` | MongoDB connection (default: `mongodb://mongo:27017` in Docker) |
 | `GEMINI_API_KEY` | Google Gemini API key |
-| `GEMINI_MODEL` | Gemini model name (default: `gemini-1.5-flash`) |
+| `GEMINI_MODEL` | Gemini model name (default: `gemini-2.5-flash`) |
 | `GEMINI_TIMEOUT_SEC` | Gemini request timeout (seconds) |
 | `ELEVEN_API_KEY` | ElevenLabs API key |
 | `ELEVEN_VOICE_ID` | ElevenLabs voice ID |
@@ -147,6 +147,7 @@ SUPER_API=http://your-backend:8000 EDGE_ID=pi-001 ./edge
 - `GET /api/cities/search?q=` - global city lookup.
 - `GET /api/session/city` and `POST /api/session/city` - active city per user session.
 - `GET /api/feeds/public` - city-scoped live public feeds (weather, seismic, official civic links).
+- `GET /api/ai/status` - backend AI mode and latest error (`cloud` vs local fallback).
 - `POST /api/chat/thread`, `GET /api/chat/threads`, and `DELETE /api/chat/thread/:id` - chat thread lifecycle.
 - `GET /api/chat/thread/:id/messages` and `POST /api/chat/thread/:id/message` - persisted operator chat.
 

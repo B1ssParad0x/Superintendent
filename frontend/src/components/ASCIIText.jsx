@@ -96,8 +96,9 @@ class AsciiFilter {
     this.context.font = `${this.fontSize}px ${this.fontFamily}`
     const charWidth = this.context.measureText('A').width
 
-    this.cols = Math.floor(this.width / (this.fontSize * (charWidth / this.fontSize)))
-    this.rows = Math.floor(this.height / this.fontSize)
+    // Keep a generous right/bottom buffer so trailing glyphs never clip.
+    this.cols = Math.ceil(this.width / (this.fontSize * (charWidth / this.fontSize))) + 8
+    this.rows = Math.ceil(this.height / this.fontSize) + 2
 
     this.canvas.width = this.cols
     this.canvas.height = this.rows
@@ -186,14 +187,17 @@ class CanvasTxt {
     this.color = color
 
     this.font = `600 ${this.fontSize}px ${this.fontFamily}`
+    // Large horizontal padding protects long words from shader/sampling edge loss.
+    this.padX = Math.ceil(this.fontSize * 1.15)
+    this.padY = Math.ceil(this.fontSize * 0.28)
   }
 
   resize() {
     this.context.font = this.font
     const metrics = this.context.measureText(this.txt)
 
-    const textWidth = Math.ceil(metrics.width) + 20
-    const textHeight = Math.ceil(metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) + 20
+    const textWidth = Math.ceil(metrics.width) + this.padX * 2
+    const textHeight = Math.ceil(metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent) + this.padY * 2
 
     this.canvas.width = textWidth
     this.canvas.height = textHeight
@@ -205,9 +209,9 @@ class CanvasTxt {
     this.context.font = this.font
 
     const metrics = this.context.measureText(this.txt)
-    const yPos = 10 + metrics.actualBoundingBoxAscent
+    const yPos = this.padY + metrics.actualBoundingBoxAscent
 
-    this.context.fillText(this.txt, 10, yPos)
+    this.context.fillText(this.txt, this.padX, yPos)
   }
 
   get width() {
@@ -240,6 +244,8 @@ class CanvAscii {
 
     this.scene = new THREE.Scene()
     this.mouse = { x: this.width / 2, y: this.height / 2 }
+    this.planeW = 0
+    this.planeH = 0
 
     this.onMouseMove = this.onMouseMove.bind(this)
   }
@@ -272,6 +278,8 @@ class CanvAscii {
     const baseH = this.planeBaseHeight
     const planeW = baseH * textAspect
     const planeH = baseH
+    this.planeW = planeW
+    this.planeH = planeH
 
     this.geometry = new THREE.PlaneGeometry(planeW, planeH, 36, 36)
     this.material = new THREE.ShaderMaterial({
@@ -288,6 +296,16 @@ class CanvAscii {
 
     this.mesh = new THREE.Mesh(this.geometry, this.material)
     this.scene.add(this.mesh)
+    this.fitCameraToPlane()
+  }
+
+  fitCameraToPlane() {
+    if (!this.planeW || !this.planeH) return
+    const vFov = THREE.MathUtils.degToRad(this.camera.fov)
+    const distByHeight = (this.planeH * 0.5) / Math.tan(vFov * 0.5)
+    const hFov = 2 * Math.atan(Math.tan(vFov * 0.5) * this.camera.aspect)
+    const distByWidth = (this.planeW * 0.5) / Math.tan(hFov * 0.5)
+    this.camera.position.z = Math.max(distByHeight, distByWidth) + 1.5
   }
 
   setRenderer() {
@@ -314,6 +332,7 @@ class CanvAscii {
 
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
+    this.fitCameraToPlane()
 
     this.filter.setSize(w, h)
 

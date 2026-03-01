@@ -49,9 +49,9 @@ function Landing() {
           />
         </div>
       </div>
-      <section className="panel relative z-10 w-full max-w-3xl rounded-2xl border border-crimson/40 p-8 text-center">
-        <div className="relative mx-auto mb-4 h-56 w-full max-w-3xl overflow-hidden rounded-md" data-ascii-source="ASCIIText.jsx">
-          <ASCIIText text="Superintendent" enableWaves={false} asciiFontSize={7} textFontSize={260} planeBaseHeight={8} />
+      <section className="panel relative z-10 w-full max-w-5xl rounded-2xl border border-crimson/40 p-8 text-center">
+        <div className="relative mx-auto mb-4 h-56 w-full max-w-5xl rounded-md" data-ascii-source="ASCIIText.jsx">
+          <ASCIIText text={'Superintendent   '} enableWaves={false} asciiFontSize={7} textFontSize={158} planeBaseHeight={5.8} />
         </div>
         <p className="mx-auto mt-2 max-w-xl text-sm text-zinc-300">
           Civic intelligence that watches quietly, reasons clearly, and logs decisions immutably.

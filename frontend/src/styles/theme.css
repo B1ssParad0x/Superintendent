@@ -35,7 +35,7 @@ a {
   box-shadow: 0 0 0 1px rgba(210, 4, 45, 0.45), 0 0 30px rgba(210, 4, 45, 0.25);
 }
 
-@keyframes marquee {
+@keyframes ticker {
   0% {
     transform: translateX(0);
   }
@@ -44,6 +44,10 @@ a {
   }
 }
 
-.animate-marquee {
-  animation: marquee 28s linear infinite;
+.ticker-track {
+  display: inline-flex;
+  gap: 0;
+  min-width: max-content;
+  animation: ticker 26s linear infinite;
+  will-change: transform;
 }

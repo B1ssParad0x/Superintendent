@@ -28,17 +28,26 @@ export default function Dashboard() {
   }, [stateQuery.data, logsQuery.data, setFromState])
 
   const latestAudio = useMemo(() => logsQuery.data?.find((x) => x.audio_url)?.audio_url, [logsQuery.data])
+  const tickerText = useMemo(() => {
+    const text = (logsQuery.data || [])
+      .slice(0, 12)
+      .map((item) => item.summary?.trim())
+      .filter(Boolean)
+      .join(' • ')
+    return text || 'Awaiting advisories'
+  }, [logsQuery.data])
 
   return (
-    <main className="mx-auto grid max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[1.8fr_1fr]">
+    <main className="mx-auto grid h-full w-full max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[1.8fr_1fr]">
       <section className="space-y-4">
         <div className="panel rounded-xl p-3">
           <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} />
         </div>
         <AdvisoryCard summary={summary} risk={risk} actions={['Monitor transit corridors', 'Stage EMS', 'Broadcast advisory']} />
         <div className="panel overflow-hidden rounded-xl py-2">
-          <div className="animate-marquee whitespace-nowrap px-3 text-sm text-zinc-300">
-            {(logsQuery.data || []).slice(0, 10).map((item) => ` • ${item.summary}`).join('') || ' • Awaiting advisories'}
+          <div className="ticker-track whitespace-nowrap px-3 text-sm text-zinc-300">
+            <span>{tickerText} &#8226; </span>
+            <span>{tickerText} &#8226; </span>
           </div>
         </div>
       </section>

@@ -1,3 +1,5 @@
+// Component ported and enhanced from https://codepen.io/JuanFuentes/pen/eYEeoyE
+
 import { useRef, useEffect } from 'react'
 import * as THREE from 'three'
 
@@ -34,7 +36,7 @@ void main() {
     vec2 pos = vUv;
     
     float move = sin(time + mouse) * 0.01;
-    float r = texture2D(uTexture, pos + cos(time * 2. - time + pos.x) * .01 + vec2(move, 0.0)).r;
+    float r = texture2D(uTexture, pos + cos(time * 2. - time + pos.x) * .01).r;
     float g = texture2D(uTexture, pos + tan(time * .5 + pos.x - time) * .01).g;
     float b = texture2D(uTexture, pos - cos(time * 2. + time + pos.y) * .01).b;
     float a = texture2D(uTexture, pos).a;
@@ -42,11 +44,11 @@ void main() {
 }
 `
 
-const PX_RATIO = typeof window !== 'undefined' ? window.devicePixelRatio : 1
-
-function mapRange(n, start, stop, start2, stop2) {
+Math.map = function (n, start, stop, start2, stop2) {
   return ((n - start) / (stop - start)) * (stop2 - start2) + start2
 }
+
+const PX_RATIO = typeof window !== 'undefined' ? window.devicePixelRatio : 1
 
 class AsciiFilter {
   constructor(renderer, { fontSize, fontFamily, charset, invert } = {}) {
@@ -182,6 +184,7 @@ class CanvasTxt {
     this.fontSize = fontSize
     this.fontFamily = fontFamily
     this.color = color
+
     this.font = `600 ${this.fontSize}px ${this.fontFamily}`
   }
 
@@ -200,8 +203,10 @@ class CanvasTxt {
     this.context.clearRect(0, 0, this.canvas.width, this.canvas.height)
     this.context.fillStyle = this.color
     this.context.font = this.font
+
     const metrics = this.context.measureText(this.txt)
     const yPos = 10 + metrics.actualBoundingBoxAscent
+
     this.context.fillText(this.txt, 10, yPos)
   }
 
@@ -232,8 +237,10 @@ class CanvAscii {
 
     this.camera = new THREE.PerspectiveCamera(45, this.width / this.height, 1, 1000)
     this.camera.position.z = 30
+
     this.scene = new THREE.Scene()
     this.mouse = { x: this.width / 2, y: this.height / 2 }
+
     this.onMouseMove = this.onMouseMove.bind(this)
   }
 
@@ -242,7 +249,7 @@ class CanvAscii {
       await document.fonts.load('600 200px "IBM Plex Mono"')
       await document.fonts.load('500 12px "IBM Plex Mono"')
     } catch {
-      // continue with fallback font
+      // ignore
     }
     await document.fonts.ready
     this.setMesh()
@@ -304,9 +311,12 @@ class CanvAscii {
   setSize(w, h) {
     this.width = w
     this.height = h
+
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
+
     this.filter.setSize(w, h)
+
     this.center = { x: w / 2, y: h / 2 }
   }
 
@@ -332,16 +342,20 @@ class CanvAscii {
 
   render() {
     const time = new Date().getTime() * 0.001
+
     this.textCanvas.render()
     this.texture.needsUpdate = true
+
     this.mesh.material.uniforms.uTime.value = Math.sin(time)
+
     this.updateRotation()
     this.filter.render(this.scene, this.camera)
   }
 
   updateRotation() {
-    const x = mapRange(this.mouse.y, 0, this.height, 0.5, -0.5)
-    const y = mapRange(this.mouse.x, 0, this.width, -0.5, 0.5)
+    const x = Math.map(this.mouse.y, 0, this.height, 0.5, -0.5)
+    const y = Math.map(this.mouse.x, 0, this.width, -0.5, 0.5)
+
     this.mesh.rotation.x += (x - this.mesh.rotation.x) * 0.05
     this.mesh.rotation.y += (y - this.mesh.rotation.y) * 0.05
   }
@@ -351,7 +365,7 @@ class CanvAscii {
       if (obj.isMesh && typeof obj.material === 'object' && obj.material !== null) {
         Object.keys(obj.material).forEach((key) => {
           const matProp = obj.material[key]
-          if (matProp && typeof matProp.dispose === 'function') {
+          if (matProp !== null && typeof matProp === 'object' && typeof matProp.dispose === 'function') {
             matProp.dispose()
           }
         })
@@ -373,12 +387,14 @@ class CanvAscii {
     this.container.removeEventListener('mousemove', this.onMouseMove)
     this.container.removeEventListener('touchmove', this.onMouseMove)
     this.clear()
-    if (this.renderer) this.renderer.dispose()
+    if (this.renderer) {
+      this.renderer.dispose()
+    }
   }
 }
 
 export default function ASCIIText({
-  text = 'Superintendent',
+  text = 'David!',
   asciiFontSize = 8,
   textFontSize = 200,
   textColor = '#fdf9f3',
@@ -415,7 +431,9 @@ export default function ASCIIText({
 
               if (!cancelled) {
                 asciiRef.current = await createAndInit(containerRef.current, w, h)
-                if (!cancelled && asciiRef.current) asciiRef.current.load()
+                if (!cancelled && asciiRef.current) {
+                  asciiRef.current.load()
+                }
               }
             }
           },
@@ -432,7 +450,9 @@ export default function ASCIIText({
         ro = new ResizeObserver((entries) => {
           if (!entries[0] || !asciiRef.current) return
           const { width: w, height: h } = entries[0].contentRect
-          if (w > 0 && h > 0) asciiRef.current.setSize(w, h)
+          if (w > 0 && h > 0) {
+            asciiRef.current.setSize(w, h)
+          }
         })
         ro.observe(containerRef.current)
       }
@@ -452,9 +472,18 @@ export default function ASCIIText({
   }, [text, asciiFontSize, textFontSize, textColor, planeBaseHeight, enableWaves])
 
   return (
-    <div ref={containerRef} className="ascii-text-container" style={{ position: 'absolute', width: '100%', height: '100%' }}>
+    <div
+      ref={containerRef}
+      className="ascii-text-container"
+      style={{
+        position: 'absolute',
+        width: '100%',
+        height: '100%',
+      }}
+    >
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&display=swap');
+
         .ascii-text-container canvas {
           position: absolute;
           left: 0;
@@ -469,6 +498,7 @@ export default function ASCIIText({
           image-rendering: crisp-edges;
           image-rendering: pixelated;
         }
+
         .ascii-text-container pre {
           margin: 0;
           user-select: none;

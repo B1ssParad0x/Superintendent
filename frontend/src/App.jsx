@@ -17,7 +17,8 @@ function ProtectedRoute({ children, adminOnly = false }) {
   const { isLoading, isAuthenticated, isAdmin } = useAppAuth()
   if (isLoading) return <div className="p-8 text-center text-zinc-400">Authenticating...</div>
   if (!isAuthenticated) return <Navigate to="/" replace />
-  if (adminOnly && !isAdmin) return <Navigate to="/dashboard" replace />
+  // Keep the Admin page visible even when claim mapping is wrong; backend still enforces admin on actions.
+  if (adminOnly && !isAdmin) return children
   return children
 }
 

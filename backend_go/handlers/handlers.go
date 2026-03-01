@@ -129,6 +129,12 @@ func (h *Handlers) Reason(c *gin.Context) {
 		b, _ := json.Marshal(t)
 		summary = string(b)
 	}
+	signals, signalScore := h.collectRiskSignals(ctx, activeCity)
+	if len(signals) > 0 {
+		if b, err := json.Marshal(signals); err == nil {
+			summary = summary + "\n\nPublic safety signals:\n" + string(b)
+		}
+	}
 
 	recentDecisions := h.getRecentDecisionSummaries(ctx, activeCity.CityID, 5)
 	if strings.EqualFold(strings.TrimSpace(c.Query("focus")), "predictive") {
@@ -140,6 +146,7 @@ func (h *Handlers) Reason(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	resp = h.enforceGroundedAdvisory(activeCity, resp, signals, signalScore)
 	if resp.RiskScore <= 0 {
 		resp.RiskScore = h.scoreFromRiskLabel(resp.Risk)
 	}
@@ -576,6 +583,17 @@ func (h *Handlers) PublicFeeds(c *gin.Context) {
 			"links": []gin.H{
 				{"label": "USGS Earthquake Feed", "url": "https://earthquake.usgs.gov/earthquakes/feed/"},
 			},
+		})
+	}
+
+	if crimeCount, crimeSource, crimeWindow, okCrime := h.fetchOfficialCrimeSignal(ctx, activeCity); okCrime {
+		feeds = append(feeds, gin.H{
+			"id":         "crime-official",
+			"kind":       "crime",
+			"source":     crimeSource,
+			"title":      "Official crime incident volume",
+			"value":      fmt.Sprintf("%d events (%s)", crimeCount, crimeWindow),
+			"updated_at": now,
 		})
 	}
 
@@ -1099,6 +1117,7 @@ func (h *Handlers) RunCityCycle(ctx context.Context, city models.CitySelection) 
 	if err != nil {
 		return err
 	}
+	resp = h.enforceGroundedAdvisory(city, resp, signals, signalScore)
 	if resp.RiskScore <= 0 && signalScore > 0 {
 		resp.RiskScore = signalScore
 	}
@@ -1339,6 +1358,12 @@ func (h *Handlers) cityFilter(cityID string) bson.M {
 func (h *Handlers) collectRiskSignals(ctx context.Context, city models.CitySelection) (map[string]any, int) {
 	sources := []string{}
 	components := map[string]int{}
+	coverage := map[string]bool{
+		"travel":   false,
+		"disaster": false,
+		"crime":    false,
+		"conflict": false,
+	}
 	details := map[string]any{
 		"city":         city.CityName,
 		"country_code": strings.ToUpper(strings.TrimSpace(city.CountryCode)),
@@ -1351,6 +1376,7 @@ func (h *Handlers) collectRiskSignals(ctx context.Context, city models.CitySelec
 		details["travel_level"] = travelLevel
 		details["travel_advisory"] = travelText
 		sources = append(sources, "travel-advisory.info")
+		coverage["travel"] = true
 	}
 
 	disasterEvents, quakeCount, okDisaster := h.fetchDisasterSignals(ctx, city)
@@ -1359,20 +1385,25 @@ func (h *Handlers) collectRiskSignals(ctx context.Context, city models.CitySelec
 		details["disaster_events_30d"] = disasterEvents
 		details["earthquakes_7d"] = quakeCount
 		sources = append(sources, "nasa-eonet", "usgs")
+		coverage["disaster"] = true
 	}
 
-	crimeMentions, okCrime := h.fetchGDELTMentions(ctx, fmt.Sprintf(`"%s" AND (crime OR robbery OR assault OR homicide OR shooting)`, city.CityName))
+	crimeCount7d, crimeSource, crimeWindow, okCrime := h.fetchOfficialCrimeSignal(ctx, city)
 	if okCrime {
-		components["crime"] = minInt(100, crimeMentions*4)
-		details["crime_mentions_72h"] = crimeMentions
-		sources = append(sources, "gdelt")
+		components["crime"] = minInt(100, int(math.Round(math.Log1p(float64(maxInt(0, crimeCount7d)))*14)))
+		details["crime_events_window"] = crimeCount7d
+		details["crime_window"] = crimeWindow
+		details["crime_source"] = crimeSource
+		sources = append(sources, crimeSource)
+		coverage["crime"] = true
 	}
 
 	conflictMentions, okConflict := h.fetchGDELTMentions(ctx, fmt.Sprintf(`"%s" AND (conflict OR terror OR military OR unrest OR riot OR war)`, city.CityName))
 	if okConflict {
-		components["conflict"] = minInt(100, conflictMentions*5)
-		details["conflict_mentions_72h"] = conflictMentions
+		components["conflict"] = minInt(100, conflictMentions*2)
+		details["conflict_mentions_72h_osint"] = conflictMentions
 		sources = append(sources, "gdelt")
+		coverage["conflict"] = true
 	}
 
 	score := h.weightedRiskScore(components)
@@ -1380,6 +1411,7 @@ func (h *Handlers) collectRiskSignals(ctx context.Context, city models.CitySelec
 		return nil, 0
 	}
 	details["components"] = components
+	details["coverage"] = coverage
 	details["sources"] = dedupeStrings(sources)
 	details["score"] = score
 	return map[string]any{
@@ -1441,7 +1473,7 @@ func (h *Handlers) fetchDisasterSignals(ctx context.Context, city models.CitySel
 	}
 
 	quakeBody, quakeErr := h.fetchJSON(ctx, fmt.Sprintf(
-		"https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=%.4f&longitude=%.4f&maxradiuskm=500&orderby=time&starttime=%s",
+		"https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=%.4f&longitude=%.4f&maxradiuskm=300&minmagnitude=3.5&orderby=time&starttime=%s",
 		city.Lat,
 		city.Lon,
 		time.Now().Add(-7*24*time.Hour).UTC().Format("2006-01-02"),
@@ -1455,6 +1487,81 @@ func (h *Handlers) fetchDisasterSignals(ctx context.Context, city models.CitySel
 		}
 	}
 	return events, quakeCount, events > 0 || quakeCount > 0
+}
+
+func (h *Handlers) fetchOfficialCrimeSignal(ctx context.Context, city models.CitySelection) (count7d int, source string, window string, ok bool) {
+	cityKey := strings.ToLower(strings.TrimSpace(city.CityName))
+	cc := strings.ToUpper(strings.TrimSpace(city.CountryCode))
+	switch {
+	case cc == "US" && strings.Contains(cityKey, "new york"):
+		n, err := h.fetchNYCCrimeRecent(ctx)
+		if err != nil {
+			return 0, "", "", false
+		}
+		return n, "nyc-open-data-nypd", "latest-500-records", true
+	case cc == "US" && strings.Contains(cityKey, "chicago"):
+		n, err := h.fetchChicagoCrimeRecent(ctx)
+		if err != nil {
+			return 0, "", "", false
+		}
+		return n, "chicago-open-data", "last-7-days", true
+	case cc == "GB":
+		n, err := h.fetchUKPoliceCrimeRecent(ctx, city.Lat, city.Lon)
+		if err != nil {
+			return 0, "", "", false
+		}
+		return n, "uk-police-data", "last-month", true
+	default:
+		return 0, "", "", false
+	}
+}
+
+func (h *Handlers) fetchNYCCrimeRecent(ctx context.Context) (int, error) {
+	u := "https://data.cityofnewyork.us/resource/qgea-i56i.json?$limit=500&$order=cmplnt_fr_dt%20DESC"
+	body, err := h.fetchJSON(ctx, u)
+	if err != nil {
+		return 0, err
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
+
+func (h *Handlers) fetchChicagoCrimeRecent(ctx context.Context) (int, error) {
+	start := time.Now().Add(-7 * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05")
+	where := url.QueryEscape(fmt.Sprintf("date >= '%s'", start))
+	u := "https://data.cityofchicago.org/resource/ijzp-q8t2.json?$select=count(*)&$where=" + where
+	body, err := h.fetchJSON(ctx, u)
+	if err != nil {
+		return 0, err
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	return int(math.Round(toFloat(rows[0]["count"]))), nil
+}
+
+func (h *Handlers) fetchUKPoliceCrimeRecent(ctx context.Context, lat, lon float64) (int, error) {
+	if lat == 0 && lon == 0 {
+		return 0, fmt.Errorf("missing coordinates")
+	}
+	month := time.Now().AddDate(0, -1, 0).Format("2006-01")
+	u := fmt.Sprintf("https://data.police.uk/api/crimes-street/all-crime?lat=%.4f&lng=%.4f&date=%s", lat, lon, month)
+	body, err := h.fetchJSON(ctx, u)
+	if err != nil {
+		return 0, err
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(body, &rows); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
 }
 
 func (h *Handlers) fetchGDELTMentions(ctx context.Context, query string) (int, bool) {
@@ -1594,6 +1701,110 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (h *Handlers) enforceGroundedAdvisory(city models.CitySelection, resp ai.ReasonResult, signals map[string]any, signalScore int) ai.ReasonResult {
+	if signalScore > 0 {
+		if resp.RiskScore > 0 {
+			resp.RiskScore = int(math.Round(float64(signalScore)*0.75 + float64(resp.RiskScore)*0.25))
+		} else {
+			resp.RiskScore = signalScore
+		}
+		resp.RiskScore = minInt(100, maxInt(0, resp.RiskScore))
+		resp.Risk = h.labelFromScore(resp.RiskScore)
+	}
+	quakeCount := signalDetailInt(signals, "earthquakes_7d")
+	disasterEvents := signalDetailInt(signals, "disaster_events_30d")
+	summaryText := strings.TrimSpace(resp.Summary)
+	hallucinatedQuake := quakeCount == 0 && strings.Contains(strings.ToLower(summaryText), "earthquake")
+	if hallucinatedQuake || looksIncompleteText(summaryText) {
+		resp = buildGroundedFallbackAdvisory(city, resp, signalScore, quakeCount, disasterEvents, signalDetailComponents(signals))
+	}
+	return resp
+}
+
+func signalDetailInt(signals map[string]any, key string) int {
+	if len(signals) == 0 {
+		return 0
+	}
+	detail, _ := signals["risk_signals"].(map[string]any)
+	if detail == nil {
+		return 0
+	}
+	return int(math.Round(toFloat(detail[key])))
+}
+
+func signalDetailComponents(signals map[string]any) map[string]int {
+	out := map[string]int{"travel": 0, "disaster": 0, "crime": 0, "conflict": 0}
+	if len(signals) == 0 {
+		return out
+	}
+	detail, _ := signals["risk_signals"].(map[string]any)
+	if detail == nil {
+		return out
+	}
+	raw, _ := detail["components"].(map[string]any)
+	for k := range out {
+		out[k] = int(math.Round(toFloat(raw[k])))
+	}
+	return out
+}
+
+func looksIncompleteText(s string) bool {
+	text := strings.TrimSpace(strings.ToLower(s))
+	if len(text) < 40 {
+		return true
+	}
+	badEnds := []string{" with", " with.", " and", " and.", " of", " of.", " in", " in.", " at", " at.", " to", " to.", " for", " for.", " currently", " currently."}
+	for _, tail := range badEnds {
+		if strings.HasSuffix(text, tail) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildGroundedFallbackAdvisory(city models.CitySelection, prev ai.ReasonResult, signalScore, quakeCount, disasterEvents int, components map[string]int) ai.ReasonResult {
+	score := signalScore
+	if score <= 0 {
+		score = 45
+	}
+	risk := "medium"
+	switch {
+	case score >= 85:
+		risk = "critical"
+	case score >= 65:
+		risk = "high"
+	case score < 40:
+		risk = "low"
+	}
+	drivers := []string{}
+	for _, k := range []string{"disaster", "travel", "crime", "conflict"} {
+		if components[k] > 0 {
+			drivers = append(drivers, fmt.Sprintf("%s:%d", k, components[k]))
+		}
+	}
+	if len(drivers) == 0 {
+		drivers = append(drivers, "limited-signal-data")
+	}
+	summary := fmt.Sprintf("%s risk index is %d/100 (%s) based on current public signals. Primary drivers are %s.", city.CityName, score, risk, strings.Join(drivers, ", "))
+	forecast := "Risk is likely to stay near current levels over the next 3-12 hours unless one of the primary drivers changes materially."
+	if quakeCount > 0 || disasterEvents > 0 {
+		forecast = fmt.Sprintf("Disaster monitoring is active (%d earthquakes in 7d, %d nearby open events in 30d). Risk may rise in the next 30m-3h if event volume accelerates.", quakeCount, disasterEvents)
+	}
+	return ai.ReasonResult{
+		Summary:   summary,
+		Risk:      risk,
+		RiskScore: score,
+		Actions: map[string]string{
+			"conservative": "Increase telemetry watch cadence and verify source freshness.",
+			"aggressive":   "Stage response resources in high-risk corridors and publish an operator advisory.",
+		},
+		Forecast:   forecast,
+		Confidence: maxInt(prev.Confidence, 65),
+		AudioText:  summary + " " + forecast,
+		Explain:    "Grounded fallback used to prevent unsupported or incomplete model output.",
+	}
 }
 
 func firstN(s string, n int) string {

@@ -79,7 +79,7 @@ func main() {
 	}
 
 	admin := r.Group("/api")
-	admin.Use(auth.RequireAdmin(jwksURL))
+	admin.Use(auth.RequireAdmin(jwksURL, cfg.AllowLocalAdmin))
 	{
 		admin.POST("/reason", h.Reason)
 		admin.POST("/commit", h.Commit)

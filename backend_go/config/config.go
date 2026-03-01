@@ -13,6 +13,7 @@ type Config struct {
 	MongoURI      string
 	Auth0Domain   string
 	Auth0Audience string
+	AllowLocalAdmin bool
 	AIWorkerURL   string
 	GeminiAPIKey  string
 	GeminiModel   string
@@ -35,6 +36,7 @@ func Load() *Config {
 		MongoURI:      getEnv("MONGO_URI", "mongodb://localhost:27017"),
 		Auth0Domain:   getEnv("AUTH0_DOMAIN", ""),
 		Auth0Audience: getEnv("AUTH0_AUDIENCE", ""),
+		AllowLocalAdmin: parseBool(getEnv("ALLOW_LOCAL_ADMIN", "false"), false),
 		AIWorkerURL:   getEnv("AI_WORKER_URL", "http://localhost:8001"),
 		GeminiAPIKey:  getEnv("GEMINI_API_KEY", ""),
 		GeminiModel:   getEnv("GEMINI_MODEL", "gemini-2.5-flash"),

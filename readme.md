@@ -69,6 +69,7 @@ Copy `.env.example` to `.env` and configure:
 | `AUTH0_DOMAIN` | Auth0 tenant (optional for dev) |
 | `AUTH0_AUDIENCE` | API audience |
 | `AUTH0_CLIENT_ID` | SPA client ID |
+| `ALLOW_LOCAL_ADMIN` | If `true`, backend treats authenticated users as admin (local/testing only) |
 | `MONGO_URI` | MongoDB connection (default: `mongodb://mongo:27017` in Docker) |
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `GEMINI_MODEL` | Gemini model name (default: `gemini-2.5-flash`) |
@@ -80,6 +81,7 @@ Copy `.env.example` to `.env` and configure:
 | `SOLANA_REQUIRE_ONCHAIN` | If `true`, `/api/commit` fails unless real on-chain signing is configured |
 | `EDGE_API_KEY` | Shared secret for edge ingest (optional) |
 | `MAPBOX_TOKEN` | Mapbox token for dashboard map |
+| `VITE_ALLOW_LOCAL_ADMIN` | If `true`, frontend shows admin controls without role claim (local/testing only) |
 | `INGEST_INTERVAL_SEC` | Seconds between background ingest runs (default: `60`, minimum effective `15`) |
 
 **Dev mode:** Without Auth0 configured, the frontend runs in dev mode and the backend accepts `Bearer dev` for admin routes.

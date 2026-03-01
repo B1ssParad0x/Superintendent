@@ -142,10 +142,12 @@ export default function Dashboard() {
   const riskSignals = riskSignalsQuery.data?.signals?.risk_signals || null
   const riskComponents = riskSignals?.components || {}
   const liveRisk = useMemo(() => {
+    const signalScore = Number(riskSignalsQuery.data?.signals?.risk_signal_score)
+    if (Number.isFinite(signalScore) && signalScore >= 0) return Math.max(0, Math.min(100, signalScore))
     const score = Number(latestDecision?.risk_score)
     if (Number.isFinite(score) && score >= 0) return Math.max(0, Math.min(100, score))
     return riskToScore(latestDecision?.risk, risk)
-  }, [latestDecision?.risk_score, latestDecision?.risk, risk])
+  }, [riskSignalsQuery.data?.signals?.risk_signal_score, latestDecision?.risk_score, latestDecision?.risk, risk])
   const advisorySummary = useMemo(() => normalizeAdvisoryText(latestDecision?.summary || summary), [latestDecision?.summary, summary])
   const tickerText = useMemo(() => {
     const text = (logsQuery.data || [])
@@ -533,8 +535,8 @@ export default function Dashboard() {
               <p className="text-zinc-300">Composite score: {riskSignals.score ?? riskSignalsQuery.data?.signals?.risk_signal_score ?? '--'}/100</p>
               <p className="text-zinc-500">Travel advisory: {riskSignals.travel_level || 'n/a'}</p>
               <p className="text-zinc-500">Disaster events (30d): {riskSignals.disaster_events_30d ?? 0}</p>
-              <p className="text-zinc-500">Crime mentions (72h): {riskSignals.crime_mentions_72h ?? 0}</p>
-              <p className="text-zinc-500">Conflict mentions (72h): {riskSignals.conflict_mentions_72h ?? 0}</p>
+              <p className="text-zinc-500">Official crime events: {riskSignals.crime_events_window ?? 0}</p>
+              <p className="text-zinc-500">Conflict OSINT mentions (72h): {riskSignals.conflict_mentions_72h_osint ?? 0}</p>
               <p className="text-zinc-500">
                 Component scores: T {riskComponents.travel ?? 0} · D {riskComponents.disaster ?? 0} · C {riskComponents.crime ?? 0} · X {riskComponents.conflict ?? 0}
               </p>

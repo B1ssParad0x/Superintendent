@@ -7,6 +7,7 @@ const AuthContext = createContext(null)
 const authDomain = import.meta.env.VITE_AUTH0_DOMAIN || ''
 const authClientId = import.meta.env.VITE_AUTH0_CLIENT_ID || ''
 const authAudience = import.meta.env.VITE_AUTH0_AUDIENCE || ''
+const allowLocalAdmin = String(import.meta.env.VITE_ALLOW_LOCAL_ADMIN || '').toLowerCase() === 'true'
 const authRedirectURI = import.meta.env.VITE_AUTH0_REDIRECT_URI || window.location.origin
 const authLogoutURI = import.meta.env.VITE_AUTH0_LOGOUT_URI || window.location.origin
 const roleClaimKey = import.meta.env.VITE_AUTH0_ROLE_CLAIM || 'https://superintendent/roles'
@@ -25,7 +26,9 @@ function parseRolesFromAccessToken(token) {
   const parts = token.split('.')
   if (parts.length < 2) return []
   try {
-    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+    const normalized = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const pad = '='.repeat((4 - (normalized.length % 4)) % 4)
+    const payload = JSON.parse(atob(normalized + pad))
     const claimRoles = payload?.[roleClaimKey]
     if (Array.isArray(claimRoles)) return claimRoles
     if (typeof claimRoles === 'string') return [claimRoles]
@@ -40,7 +43,7 @@ function AuthBridge({ children }) {
   const [tokenRoles, setTokenRoles] = useState([])
   const profileRoles = parseRoles(user)
   const roles = tokenRoles.length > 0 ? tokenRoles : profileRoles
-  const isAdmin = roles.some((r) => String(r).toLowerCase().includes('admin'))
+  const isAdmin = allowLocalAdmin || roles.some((r) => String(r).toLowerCase().includes('admin'))
 
   useEffect(() => {
     setTokenGetter(async () => (isAuthenticated ? await getAccessTokenSilently() : null))

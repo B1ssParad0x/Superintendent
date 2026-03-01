@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import AudioPlayer from '../components/AudioPlayer'
 import { commitDecision, commitLatestDecision, getSessionCity, triggerReason, verifyAuditTrail } from '../context/appApi'
 import { getErrorMessage } from '../context/apiClient'
+import { useAppAuth } from '../context/AuthProvider'
 
 export default function Admin() {
+  const { isAdmin, roles } = useAppAuth()
   const [activeCity, setActiveCity] = useState(null)
   const [reasonResult, setReasonResult] = useState(null)
   const [commitResult, setCommitResult] = useState(null)
@@ -93,10 +95,36 @@ export default function Admin() {
     }
   }
 
+  async function onDemoRun() {
+    setLoading(true)
+    setError('')
+    setLastAction('Running demo flow: predictive analysis -> commit latest -> verify audit...')
+    try {
+      const reason = await triggerReason(activeCity, { focus: 'predictive' })
+      setReasonResult(reason)
+      const commit = await commitLatestDecision()
+      setCommitResult(commit)
+      const audit = await verifyAuditTrail()
+      setAuditResult(audit)
+      setLastAction('Demo flow complete.')
+    } catch (err) {
+      setError(getErrorMessage(err))
+      setLastAction('')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <main className="mx-auto max-w-5xl space-y-4 px-4 py-4">
       <section className="panel rounded-xl p-4">
         <h2 className="mb-4 font-display text-lg">Administrative Console</h2>
+        {!isAdmin && (
+          <p className="mb-3 rounded border border-amber-500/40 bg-amber-900/20 px-3 py-2 text-xs text-amber-200">
+            You are signed in but your token is missing the `admin` role claim. Current roles: {roles?.join(', ') || 'none'}.
+            Admin actions will return 403 until Auth0 role mapping includes `https://superintendent/roles: ["admin"]`.
+          </p>
+        )}
         <p className="mb-3 text-xs text-zinc-400">
           Active city: {activeCity?.city_name || 'Default City'} {activeCity?.country_code ? `(${activeCity.country_code})` : ''}
         </p>
@@ -123,6 +151,9 @@ export default function Admin() {
           </button>
           <button disabled={loading} className="rounded border border-zinc-700 px-4 py-2 text-sm text-zinc-200 disabled:opacity-50" onClick={onVerifyAudit}>
             Verify Audit Trail
+          </button>
+          <button disabled={loading} className="rounded border border-emerald-600/50 bg-emerald-900/20 px-4 py-2 text-sm text-emerald-200 disabled:opacity-50" onClick={onDemoRun}>
+            Run Demo Flow
           </button>
         </div>
         {error && <p className="mt-3 text-sm text-red-400">{error}</p>}

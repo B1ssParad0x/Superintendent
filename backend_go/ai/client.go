@@ -176,7 +176,7 @@ func (c *Client) generateWithModel(ctx context.Context, model, prompt string) (s
 		},
 		"generationConfig": map[string]interface{}{
 			"temperature":      0.2,
-			"maxOutputTokens":  420,
+			"maxOutputTokens":  900,
 			"candidateCount":   1,
 		},
 	}
@@ -295,7 +295,7 @@ Recent decisions:
 
 Respond with VALID JSON only:
 {
-  "summary": "2-3 sentence executive summary grounded in telemetry and risk signals",
+  "summary": "2-3 complete sentences (no truncation) grounded in telemetry and risk signals",
   "risk": "low|medium|high",
   "risk_score": 0,
   "actions": {
@@ -349,11 +349,11 @@ func parseReasonJSON(text string) ReasonResult {
 			looseSummary = sanitizeNarrative(trimmed)
 		}
 		return ReasonResult{
-			Summary:   firstN(looseSummary, 220),
+			Summary:   smartClipSummary(looseSummary, 360),
 			Risk:      "medium",
 			RiskScore: 55,
 			Actions:   map[string]string{"conservative": "Review AI output.", "aggressive": "Retry generation."},
-			Forecast:  firstN(looseForecast, 180),
+			Forecast:  smartClipSummary(looseForecast, 260),
 			AudioText: "Unable to produce a structured advisory.",
 			Explain:   "Gemini returned non-JSON response.",
 		}
@@ -385,11 +385,11 @@ func parseReasonJSON(text string) ReasonResult {
 		parsed.RiskScore = 100
 	}
 	return ReasonResult{
-		Summary:   parsed.Summary,
+		Summary:   smartClipSummary(parsed.Summary, 360),
 		Risk:      parsed.Risk,
 		RiskScore: parsed.RiskScore,
 		Actions:   parsed.Actions,
-		Forecast:  parsed.Forecast,
+		Forecast:  smartClipSummary(parsed.Forecast, 260),
 		Confidence: func(v int) int {
 			if v < 0 {
 				return 0
@@ -402,6 +402,30 @@ func parseReasonJSON(text string) ReasonResult {
 		AudioText: parsed.AudioText,
 		Explain:   parsed.Explain,
 	}
+}
+
+func smartClipSummary(raw string, max int) string {
+	s := strings.TrimSpace(raw)
+	if strings.HasPrefix(strings.ToLower(s), "summary:") {
+		s = strings.TrimSpace(s[len("summary:"):])
+	}
+	if s == "" {
+		return ""
+	}
+	if len(s) > max {
+		chunk := strings.TrimSpace(s[:max])
+		if i := strings.LastIndexAny(chunk, ".!?"); i > max/2 {
+			s = strings.TrimSpace(chunk[:i+1])
+		} else if i := strings.LastIndex(chunk, " "); i > max/2 {
+			s = strings.TrimSpace(chunk[:i])
+		} else {
+			s = chunk
+		}
+	}
+	if !strings.HasSuffix(s, ".") && !strings.HasSuffix(s, "!") && !strings.HasSuffix(s, "?") {
+		s += "."
+	}
+	return s
 }
 
 func extractField(raw, field string) string {

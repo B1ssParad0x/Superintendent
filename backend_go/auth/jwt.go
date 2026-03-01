@@ -77,7 +77,7 @@ type Claims struct {
 }
 
 // RequireAdmin middleware - validates JWT via JWKS and ensures admin role
-func RequireAdmin(jwksURL string) gin.HandlerFunc {
+func RequireAdmin(jwksURL string, allowLocalAdmin bool) gin.HandlerFunc {
 	k := newJWKS(jwksURL)
 
 	return func(c *gin.Context) {
@@ -99,6 +99,11 @@ func RequireAdmin(jwksURL string) gin.HandlerFunc {
 		if err != nil {
 			c.JSON(401, gin.H{"error": "invalid token"})
 			c.Abort()
+			return
+		}
+		if allowLocalAdmin {
+			c.Set("claims", claims)
+			c.Next()
 			return
 		}
 

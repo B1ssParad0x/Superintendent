@@ -105,3 +105,9 @@ export async function sendChatMessage(threadId, content) {
   const { data } = await api.post(`/api/chat/thread/${encodeURIComponent(threadId)}/message`, { content })
   return data
 }
+
+export async function getPublicFeeds(city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.get('/api/feeds/public', { params })
+  return data
+}

@@ -63,6 +63,7 @@ func main() {
 		user.GET("/session/city", h.GetSessionCity)
 		user.POST("/session/city", h.SetSessionCity)
 		user.GET("/cities/search", h.SearchCities)
+		user.GET("/feeds/public", h.PublicFeeds)
 		user.POST("/chat/thread", h.CreateChatThread)
 		user.GET("/chat/threads", h.ListChatThreads)
 		user.GET("/chat/thread/:id/messages", h.GetChatMessages)

@@ -8,6 +8,7 @@ import {
   createChatThread,
   getChatMessages,
   getLogs,
+  getPublicFeeds,
   getSessionCity,
   getStateByCity,
   getTelemetry,
@@ -37,6 +38,7 @@ export default function Dashboard() {
   const stateQuery = useFetch(() => getStateByCity(activeCity), 10_000, [activeCity?.city_id])
   const telemetryQuery = useFetch(() => getTelemetry(activeCity), 12_000, [activeCity?.city_id])
   const logsQuery = useFetch(() => getLogs(activeCity), 20_000, [activeCity?.city_id])
+  const feedsQuery = useFetch(() => getPublicFeeds(activeCity), 20_000, [activeCity?.city_id])
 
   useEffect(() => {
     let mounted = true
@@ -228,6 +230,52 @@ export default function Dashboard() {
             >
               {chatBusy ? '...' : 'Send'}
             </button>
+          </div>
+        </section>
+        <section className="panel rounded-xl p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm uppercase tracking-widest text-zinc-400">Live City Feeds</h3>
+            <button onClick={feedsQuery.refresh} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200">
+              Refresh
+            </button>
+          </div>
+          {feedsQuery.error && <p className="mb-2 text-xs text-red-400">{feedsQuery.error}</p>}
+          <div className="max-h-64 space-y-2 overflow-auto pr-1">
+            {(feedsQuery.data?.feeds || []).length === 0 ? (
+              <p className="text-xs text-zinc-500">No public feeds available for this city yet.</p>
+            ) : (
+              (feedsQuery.data?.feeds || []).map((feed) => (
+                <div key={feed.id} className="rounded border border-zinc-800 bg-black/30 p-2">
+                  <p className="text-xs uppercase tracking-wide text-zinc-500">
+                    {feed.kind} · {feed.source}
+                  </p>
+                  <p className="text-sm text-zinc-200">{feed.title}</p>
+                  {feed.value && <p className="mt-1 text-xs text-zinc-300">{feed.value}</p>}
+                  {feed.links?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {feed.links.slice(0, 3).map((link) => (
+                        <a
+                          key={link.url}
+                          href={link.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded border border-zinc-700 px-2 py-1 text-xs text-crimson hover:bg-zinc-900"
+                        >
+                          {link.label}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {feed.items?.length > 0 && (
+                    <ul className="mt-2 list-disc space-y-1 pl-4 text-xs text-zinc-300">
+                      {feed.items.slice(0, 3).map((item, idx) => (
+                        <li key={`${feed.id}-${idx}`}>{item}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </section>
       </section>

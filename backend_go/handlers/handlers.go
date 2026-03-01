@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -283,6 +284,220 @@ func (h *Handlers) Logs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"decisions": decisions})
+}
+
+// PublicFeeds aggregates city-scoped public feeds from official/open providers.
+func (h *Handlers) PublicFeeds(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	if cityID := strings.TrimSpace(c.Query("city_id")); cityID != "" && cityID != activeCity.CityID {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
+		var city models.CitySelection
+		if err := db.CitySessionsCol.FindOne(ctx, bson.M{"principal_id": principalID, "city_id": cityID}).Decode(&city); err == nil {
+			activeCity = city
+		}
+	}
+	if activeCity.Lat == 0 && activeCity.Lon == 0 {
+		activeCity.Lat = h.cfg.IngestLat
+		activeCity.Lon = h.cfg.IngestLon
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
+	defer cancel()
+	now := time.Now().UTC().Format(time.RFC3339)
+	feeds := make([]gin.H, 0, 6)
+
+	if weather, err := h.fetchOpenMeteoCurrent(ctx, activeCity.Lat, activeCity.Lon); err == nil {
+		feeds = append(feeds, gin.H{
+			"id":         "weather-current",
+			"kind":       "weather",
+			"source":     "Open-Meteo",
+			"title":      "Current weather conditions",
+			"value":      weather,
+			"updated_at": now,
+			"links": []gin.H{
+				{"label": "Open-Meteo", "url": "https://open-meteo.com/"},
+			},
+		})
+	}
+
+	if quakes, err := h.fetchUSGSNearbyQuakes(ctx, activeCity.Lat, activeCity.Lon); err == nil {
+		feeds = append(feeds, gin.H{
+			"id":         "seismic-nearby",
+			"kind":       "seismic",
+			"source":     "USGS",
+			"title":      "Recent nearby seismic events",
+			"items":      quakes,
+			"updated_at": now,
+			"links": []gin.H{
+				{"label": "USGS Earthquake Feed", "url": "https://earthquake.usgs.gov/earthquakes/feed/"},
+			},
+		})
+	}
+
+	if strings.EqualFold(activeCity.CountryCode, "US") && strings.Contains(strings.ToLower(activeCity.CityName), "new york") {
+		if count, err := h.fetchNYC311Count(ctx); err == nil {
+			feeds = append(feeds, gin.H{
+				"id":         "nyc-311",
+				"kind":       "civic",
+				"source":     "NYC Open Data",
+				"title":      "NYC 311 recent complaint sample",
+				"value":      fmt.Sprintf("%d complaints in latest sample window", count),
+				"updated_at": now,
+				"links": []gin.H{
+					{"label": "NYC 311 API", "url": "https://data.cityofnewyork.us/resource/fhrw-4uyv.json"},
+				},
+			})
+		}
+	}
+
+	feeds = append(feeds, gin.H{
+		"id":         "official-portals",
+		"kind":       "civic",
+		"source":     "Official portals",
+		"title":      "City operations and open-data links",
+		"updated_at": now,
+		"links":      h.officialCityLinks(activeCity),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"city":       activeCity,
+		"updated_at": now,
+		"feeds":      feeds,
+	})
+}
+
+func (h *Handlers) fetchOpenMeteoCurrent(ctx context.Context, lat, lon float64) (string, error) {
+	u := fmt.Sprintf(
+		"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&timezone=auto",
+		lat, lon,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("open-meteo: %s", resp.Status)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var payload struct {
+		Current struct {
+			TempC      float64 `json:"temperature_2m"`
+			Humidity   float64 `json:"relative_humidity_2m"`
+			WindSpeed  float64 `json:"wind_speed_10m"`
+			WeatherCode int    `json:"weather_code"`
+		} `json:"current"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%.1f C, %.0f%% humidity, %.1f m/s wind, weather code %d",
+		payload.Current.TempC, payload.Current.Humidity, payload.Current.WindSpeed, payload.Current.WeatherCode), nil
+}
+
+func (h *Handlers) fetchUSGSNearbyQuakes(ctx context.Context, lat, lon float64) ([]string, error) {
+	u := fmt.Sprintf(
+		"https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&orderby=time&limit=5&latitude=%.4f&longitude=%.4f&maxradiuskm=300",
+		lat, lon,
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("usgs: %s", resp.Status)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var payload struct {
+		Features []struct {
+			Properties struct {
+				Mag  float64 `json:"mag"`
+				Place string `json:"place"`
+				Time int64   `json:"time"`
+			} `json:"properties"`
+			Geometry struct {
+				Coordinates []float64 `json:"coordinates"`
+			} `json:"geometry"`
+		} `json:"features"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Features) == 0 {
+		return []string{"No recent events in configured radius."}, nil
+	}
+	out := make([]string, 0, len(payload.Features))
+	for _, feature := range payload.Features {
+		dist := 0.0
+		if len(feature.Geometry.Coordinates) >= 2 {
+			dist = haversineKm(lat, lon, feature.Geometry.Coordinates[1], feature.Geometry.Coordinates[0])
+		}
+		when := time.UnixMilli(feature.Properties.Time).UTC().Format("2006-01-02 15:04 UTC")
+		out = append(out, fmt.Sprintf("M%.1f · %.0f km · %s · %s", feature.Properties.Mag, dist, when, feature.Properties.Place))
+	}
+	return out, nil
+}
+
+func (h *Handlers) fetchNYC311Count(ctx context.Context) (int, error) {
+	u := "https://data.cityofnewyork.us/resource/fhrw-4uyv.json?$limit=30&$order=created_date%20DESC&$select=complaint_type"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("nyc311: %s", resp.Status)
+	}
+	var rows []map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
+
+func (h *Handlers) officialCityLinks(city models.CitySelection) []gin.H {
+	links := []gin.H{
+		{
+			"label": "Open data portal search",
+			"url":   fmt.Sprintf("https://www.google.com/search?q=%s+official+open+data+portal", url.QueryEscape(city.CityName)),
+		},
+		{
+			"label": "Emergency management search",
+			"url":   fmt.Sprintf("https://www.google.com/search?q=%s+official+emergency+management", url.QueryEscape(city.CityName)),
+		},
+	}
+	if strings.EqualFold(city.CountryCode, "US") && strings.Contains(strings.ToLower(city.CityName), "new york") {
+		links = append(links,
+			gin.H{"label": "NYC Open Data", "url": "https://opendata.cityofnewyork.us/"},
+			gin.H{"label": "NYC DOT Traffic Cameras", "url": "https://nyctmc.org/cameras"},
+		)
+	}
+	return links
+}
+
+func haversineKm(lat1, lon1, lat2, lon2 float64) float64 {
+	const r = 6371.0
+	dLat := (lat2 - lat1) * math.Pi / 180
+	dLon := (lon2 - lon1) * math.Pi / 180
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) +
+		math.Cos(lat1*math.Pi/180)*math.Cos(lat2*math.Pi/180)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	c := 2 * math.Atan2(math.Sqrt(a), math.Sqrt(1-a))
+	return r * c
 }
 
 // SearchCities provides global city lookup using Open-Meteo geocoding.

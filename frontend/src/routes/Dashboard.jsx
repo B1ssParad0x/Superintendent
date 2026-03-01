@@ -32,6 +32,35 @@ function riskToScore(riskLabel, fallback = 35) {
   return fallback
 }
 
+function normalizeAdvisoryText(raw) {
+  const text = String(raw || '').trim()
+  if (!text) return ''
+  const maybeJSON = text.startsWith('{') || text.startsWith('"')
+  if (maybeJSON && text.includes('"summary"')) {
+    try {
+      let parsed = JSON.parse(text)
+      if (typeof parsed === 'string') parsed = JSON.parse(parsed)
+      if (parsed && typeof parsed.summary === 'string') return parsed.summary.trim()
+    } catch {
+      // Fall back to plain text normalization.
+    }
+  }
+  const summaryMatch = text.match(/["']summary["']\s*:\s*["']([^"']+)["']/i)
+  const extracted = summaryMatch?.[1] || text
+  return extracted
+    .replace(/[{}\[\]"]/g, ' ')
+    .replace(/\s*,\s*/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function compactTickerItem(raw, maxLen = 140) {
+  const normalized = normalizeAdvisoryText(raw)
+  if (!normalized) return ''
+  if (normalized.length <= maxLen) return normalized
+  return `${normalized.slice(0, maxLen - 1)}…`
+}
+
 export default function Dashboard() {
   const [activeCity, setActiveCity] = useState(null)
   const [cityQuery, setCityQuery] = useState('')
@@ -110,10 +139,11 @@ export default function Dashboard() {
 
   const latestAudio = useMemo(() => logsQuery.data?.find((x) => x.audio_url)?.audio_url, [logsQuery.data])
   const latestDecision = useMemo(() => (logsQuery.data || [])[0] || null, [logsQuery.data])
+  const advisorySummary = useMemo(() => normalizeAdvisoryText(latestDecision?.summary || summary), [latestDecision?.summary, summary])
   const tickerText = useMemo(() => {
     const text = (logsQuery.data || [])
-      .slice(0, 12)
-      .map((item) => item.summary?.trim())
+      .slice(0, 8)
+      .map((item) => compactTickerItem(item.summary))
       .filter(Boolean)
       .join(' • ')
     return text || 'Awaiting advisories'
@@ -226,6 +256,9 @@ export default function Dashboard() {
             <input
               value={cityQuery}
               onChange={(e) => setCityQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') onSearchCity()
+              }}
               placeholder="Search city (e.g. Tokyo, Lagos, Sao Paulo)"
               className="min-w-64 flex-1 rounded border border-zinc-700 bg-black/50 px-3 py-2 text-sm text-zinc-100"
             />
@@ -252,16 +285,18 @@ export default function Dashboard() {
           <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} />
         </div>
         <AdvisoryCard
-          summary={latestDecision?.summary || summary}
+          summary={advisorySummary}
           risk={riskToScore(latestDecision?.risk, risk)}
           actions={latestDecision?.actions || ['Monitor transit corridors', 'Stage EMS', 'Broadcast advisory']}
           forecast={latestDecision?.forecast || ''}
           confidence={typeof latestDecision?.confidence === 'number' ? latestDecision.confidence : null}
         />
-        <div className="panel overflow-hidden rounded-xl py-2">
-          <div className="ticker-track whitespace-nowrap px-3 text-sm text-zinc-300">
+        <div className="panel rounded-xl py-2">
+          <div className="ticker-viewport px-3">
+            <div className="ticker-track text-sm text-zinc-300">
             <span>{tickerText} &#8226; </span>
             <span>{tickerText} &#8226; </span>
+            </div>
           </div>
         </div>
         <section className="panel rounded-xl p-4">

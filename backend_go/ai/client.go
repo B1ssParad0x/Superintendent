@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -289,10 +290,16 @@ func parseReasonJSON(text string) ReasonResult {
 		Explain   string            `json:"explain"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(trimmed)), &parsed); err != nil {
+		looseSummary := extractField(trimmed, "summary")
+		looseForecast := extractField(trimmed, "forecast")
+		if looseSummary == "" {
+			looseSummary = sanitizeNarrative(trimmed)
+		}
 		return ReasonResult{
-			Summary:   firstN(trimmed, 220),
+			Summary:   firstN(looseSummary, 220),
 			Risk:      "medium",
 			Actions:   map[string]string{"conservative": "Review AI output.", "aggressive": "Retry generation."},
+			Forecast:  firstN(looseForecast, 180),
 			AudioText: "Unable to produce a structured advisory.",
 			Explain:   "Gemini returned non-JSON response.",
 		}
@@ -320,6 +327,25 @@ func parseReasonJSON(text string) ReasonResult {
 		AudioText: parsed.AudioText,
 		Explain:   parsed.Explain,
 	}
+}
+
+func extractField(raw, field string) string {
+	pattern := fmt.Sprintf(`(?is)["']%s["']\s*:\s*["']([^"']+)["']`, regexp.QuoteMeta(field))
+	re := regexp.MustCompile(pattern)
+	match := re.FindStringSubmatch(raw)
+	if len(match) < 2 {
+		return ""
+	}
+	return sanitizeNarrative(match[1])
+}
+
+func sanitizeNarrative(raw string) string {
+	text := strings.TrimSpace(raw)
+	replacements := []string{"{", " ", "}", " ", "[", " ", "]", " ", "\"", "", "'", "", "\\n", " ", "\\t", " ", ",", " "}
+	replacer := strings.NewReplacer(replacements...)
+	text = replacer.Replace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	return strings.TrimSpace(text)
 }
 
 func firstN(s string, n int) string {

@@ -102,7 +102,7 @@ func (h *Handlers) Reason(c *gin.Context) {
 	principalID := h.getPrincipalID(c)
 	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 	defer cancel()
 
 	// Fetch recent telemetry for context
@@ -129,16 +129,20 @@ func (h *Handlers) Reason(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	if resp.RiskScore <= 0 {
+		resp.RiskScore = h.scoreFromRiskLabel(resp.Risk)
+	}
 
 	// Optionally generate audio
 	audioURL := ""
 	if resp.AudioText != "" && h.worker != nil {
-		audioURL, _ = h.worker.Speak(ctx, resp.AudioText)
+		audioURL, _ = h.worker.Speak(ctx, advisorySpeechText(resp.Summary, resp.Forecast))
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"summary":    resp.Summary,
 		"risk":       resp.Risk,
+		"risk_score": resp.RiskScore,
 		"actions":    resp.Actions,
 		"forecast":   resp.Forecast,
 		"confidence": resp.Confidence,
@@ -305,6 +309,66 @@ func (h *Handlers) AIStatus(c *gin.Context) {
 		"last_error":  firstN(lastErr, 280),
 		"last_checked": lastAt,
 	})
+}
+
+func (h *Handlers) RiskSources(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 6*time.Second)
+	defer cancel()
+
+	filter := h.cityFilter(activeCity.CityID)
+	filter["node_id"] = "public-risk-signals"
+
+	var latest models.Telemetry
+	if err := db.TelemetryCol.FindOne(ctx, filter, options.FindOne().SetSort(bson.D{{Key: "ts", Value: -1}})).Decode(&latest); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "risk signals not available yet",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"city_id":      activeCity.CityID,
+		"city_name":    activeCity.CityName,
+		"country_code": activeCity.CountryCode,
+		"updated":      latest.Ts,
+		"signals":      latest.Metrics,
+	})
+}
+
+func (h *Handlers) RefreshAdvisory(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	var req struct {
+		ForceAudio bool `json:"force_audio"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+	defer cancel()
+	if err := h.RunCityCycle(ctx, activeCity); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	var latest models.Decision
+	if err := db.DecisionsCol.FindOne(ctx, h.cityFilter(activeCity.CityID), options.FindOne().SetSort(bson.D{{Key: "when", Value: -1}})).Decode(&latest); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no advisory available"})
+		return
+	}
+
+	if req.ForceAudio && h.worker != nil {
+		text := advisorySpeechText(latest.Summary, latest.Forecast)
+		if audioURL, err := h.worker.Speak(ctx, text); err == nil && strings.TrimSpace(audioURL) != "" {
+			latest.AudioURL = audioURL
+			_, _ = db.DecisionsCol.UpdateOne(ctx, bson.M{
+				"city_id": latest.CityID,
+				"when":    latest.When,
+				"summary": latest.Summary,
+			}, bson.M{"$set": bson.M{"audio_url": audioURL}})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"advisory": latest})
 }
 
 // PublicFeeds aggregates city-scoped public feeds from official/open providers.
@@ -850,17 +914,42 @@ func (h *Handlers) RunCityCycle(ctx context.Context, city models.CitySelection) 
 	if err := ingest.RunForCity(ctx, h.cfg, city); err != nil {
 		return err
 	}
+	signals, signalScore := h.collectRiskSignals(ctx, city)
+	if len(signals) > 0 {
+		doc := models.Telemetry{
+			NodeID:      "public-risk-signals",
+			Ts:          time.Now(),
+			Loc:         models.Location{Lat: city.Lat, Lon: city.Lon},
+			Metrics:     signals,
+			Signature:   "server-ingest",
+			CityID:      city.CityID,
+			CityName:    city.CityName,
+			CountryCode: city.CountryCode,
+		}
+		_, _ = db.TelemetryCol.InsertOne(ctx, doc)
+	}
 	telemetrySummary, recentDecisions, err := h.cityReasonContext(ctx, city.CityID)
 	if err != nil {
 		return err
+	}
+	if len(signals) > 0 {
+		if b, err := json.Marshal(signals); err == nil {
+			telemetrySummary = telemetrySummary + "\n\nPublic safety signals:\n" + string(b)
+		}
 	}
 	resp, err := h.ai.Reason(ctx, city.CityName, telemetrySummary, recentDecisions)
 	if err != nil {
 		return err
 	}
+	if resp.RiskScore <= 0 && signalScore > 0 {
+		resp.RiskScore = signalScore
+	}
+	if resp.RiskScore <= 0 {
+		resp.RiskScore = h.scoreFromRiskLabel(resp.Risk)
+	}
 	audioURL := ""
 	if resp.AudioText != "" && h.worker != nil {
-		audioURL, _ = h.worker.Speak(ctx, resp.AudioText)
+		audioURL, _ = h.worker.Speak(ctx, advisorySpeechText(resp.Summary, resp.Forecast))
 	}
 	return h.saveAdvisory(ctx, city, resp, audioURL, "auto_cycle")
 }
@@ -880,8 +969,94 @@ func (h *Handlers) cityReasonContext(ctx context.Context, cityID string) (string
 		b, _ := json.Marshal(t)
 		summary = string(b)
 	}
-	recentDecisions := h.getRecentDecisionSummaries(ctx, cityID, 5)
+	dcur, err := db.DecisionsCol.Find(ctx, h.cityFilter(cityID), options.Find().SetSort(bson.D{{Key: "when", Value: -1}}).SetLimit(8))
+	if err != nil {
+		return "", nil, err
+	}
+	var decisions []models.Decision
+	if err := dcur.All(ctx, &decisions); err != nil {
+		return "", nil, err
+	}
+	recentDecisions := make([]string, 0, minInt(5, len(decisions)))
+	for i := 0; i < len(decisions) && i < 5; i++ {
+		if s := strings.TrimSpace(decisions[i].Summary); s != "" {
+			recentDecisions = append(recentDecisions, s)
+		}
+	}
+	if pred := buildPredictiveContext(t, decisions); len(pred) > 0 {
+		if b, err := json.Marshal(pred); err == nil {
+			summary = summary + "\n\nPredictive context:\n" + string(b)
+		}
+	}
 	return summary, recentDecisions, nil
+}
+
+func buildPredictiveContext(telemetry []models.Telemetry, decisions []models.Decision) map[string]any {
+	out := map[string]any{
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	if len(telemetry) > 0 {
+		latest := telemetry[0].Ts
+		nodes := map[string]struct{}{}
+		for _, point := range telemetry {
+			if point.NodeID != "" {
+				nodes[point.NodeID] = struct{}{}
+			}
+		}
+		out["telemetry_points"] = len(telemetry)
+		out["active_nodes"] = len(nodes)
+		out["freshness_minutes"] = int(time.Since(latest).Minutes())
+	}
+	scores := make([]int, 0, len(decisions))
+	recent6h := 0
+	cut := time.Now().Add(-6 * time.Hour)
+	for _, d := range decisions {
+		if d.RiskScore > 0 {
+			scores = append(scores, d.RiskScore)
+		}
+		if d.When.After(cut) {
+			recent6h++
+		}
+	}
+	if len(scores) > 0 {
+		last := scores
+		if len(last) > 6 {
+			last = last[:6]
+		}
+		out["recent_risk_scores"] = last
+		out["risk_trend"] = riskTrend(last)
+	}
+	out["advisories_last_6h"] = recent6h
+	return out
+}
+
+func riskTrend(scores []int) string {
+	if len(scores) < 4 {
+		return "insufficient_data"
+	}
+	n := len(scores)
+	newer := avgInts(scores[:n/2])
+	older := avgInts(scores[n/2:])
+	delta := newer - older
+	switch {
+	case delta >= 8:
+		return "rising"
+	case delta <= -8:
+		return "falling"
+	default:
+		return "stable"
+	}
+}
+
+func avgInts(v []int) int {
+	if len(v) == 0 {
+		return 0
+	}
+	sum := 0
+	for _, x := range v {
+		sum += x
+	}
+	return int(math.Round(float64(sum) / float64(len(v))))
 }
 
 func (h *Handlers) saveAdvisory(ctx context.Context, city models.CitySelection, resp ai.ReasonResult, audioURL, source string) error {
@@ -902,6 +1077,7 @@ func (h *Handlers) saveAdvisory(ctx context.Context, city models.CitySelection, 
 		AudioURL:    audioURL,
 		SolanaTx:    "",
 		Risk:        strings.ToLower(strings.TrimSpace(resp.Risk)),
+		RiskScore:   resp.RiskScore,
 		Actions:     resp.Actions,
 		Forecast:    resp.Forecast,
 		Confidence:  resp.Confidence,
@@ -913,6 +1089,18 @@ func (h *Handlers) saveAdvisory(ctx context.Context, city models.CitySelection, 
 	}
 	_, err := db.DecisionsCol.InsertOne(ctx, doc)
 	return err
+}
+
+func advisorySpeechText(summary, forecast string) string {
+	s := strings.TrimSpace(summary)
+	f := strings.TrimSpace(forecast)
+	if s == "" && f == "" {
+		return "City advisory update: conditions are being monitored. Please review dashboard telemetry for current status."
+	}
+	if f == "" {
+		return s
+	}
+	return fmt.Sprintf("%s Forecast: %s", s, f)
 }
 
 func (h *Handlers) getRecentDecisionSummaries(ctx context.Context, cityID string, limit int64) []string {
@@ -988,6 +1176,266 @@ func (h *Handlers) cityFilter(cityID string) bson.M {
 		return bson.M{"$or": []bson.M{{"city_id": cityID}, {"city_id": bson.M{"$exists": false}}}}
 	}
 	return bson.M{"city_id": cityID}
+}
+
+func (h *Handlers) collectRiskSignals(ctx context.Context, city models.CitySelection) (map[string]any, int) {
+	sources := []string{}
+	components := map[string]int{}
+	details := map[string]any{
+		"city":         city.CityName,
+		"country_code": strings.ToUpper(strings.TrimSpace(city.CountryCode)),
+		"generated_at": time.Now().UTC().Format(time.RFC3339),
+	}
+
+	travelScore, travelLevel, travelText, okTravel := h.fetchTravelAdvisory(ctx, city.CountryCode)
+	if okTravel {
+		components["travel"] = travelScore
+		details["travel_level"] = travelLevel
+		details["travel_advisory"] = travelText
+		sources = append(sources, "travel-advisory.info")
+	}
+
+	disasterEvents, quakeCount, okDisaster := h.fetchDisasterSignals(ctx, city)
+	if okDisaster {
+		components["disaster"] = minInt(100, disasterEvents*18+quakeCount*12)
+		details["disaster_events_30d"] = disasterEvents
+		details["earthquakes_7d"] = quakeCount
+		sources = append(sources, "nasa-eonet", "usgs")
+	}
+
+	crimeMentions, okCrime := h.fetchGDELTMentions(ctx, fmt.Sprintf(`"%s" AND (crime OR robbery OR assault OR homicide OR shooting)`, city.CityName))
+	if okCrime {
+		components["crime"] = minInt(100, crimeMentions*4)
+		details["crime_mentions_72h"] = crimeMentions
+		sources = append(sources, "gdelt")
+	}
+
+	conflictMentions, okConflict := h.fetchGDELTMentions(ctx, fmt.Sprintf(`"%s" AND (conflict OR terror OR military OR unrest OR riot OR war)`, city.CityName))
+	if okConflict {
+		components["conflict"] = minInt(100, conflictMentions*5)
+		details["conflict_mentions_72h"] = conflictMentions
+		sources = append(sources, "gdelt")
+	}
+
+	score := h.weightedRiskScore(components)
+	if score == 0 {
+		return nil, 0
+	}
+	details["components"] = components
+	details["sources"] = dedupeStrings(sources)
+	details["score"] = score
+	return map[string]any{
+		"risk_signal_score": score,
+		"risk_signal_label": h.labelFromScore(score),
+		"risk_signals":      details,
+	}, score
+}
+
+func (h *Handlers) fetchTravelAdvisory(ctx context.Context, countryCode string) (score int, level string, advisory string, ok bool) {
+	cc := strings.ToUpper(strings.TrimSpace(countryCode))
+	if len(cc) < 2 {
+		return 0, "", "", false
+	}
+	u := "https://www.travel-advisory.info/api?countrycode=" + url.QueryEscape(cc)
+	body, err := h.fetchJSON(ctx, u)
+	if err != nil {
+		return 0, "", "", false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0, "", "", false
+	}
+	data, _ := payload["data"].(map[string]any)
+	entry, _ := data[cc].(map[string]any)
+	advisoryObj, _ := entry["advisory"].(map[string]any)
+	rawScore := toFloat(advisoryObj["score"])
+	if rawScore <= 0 {
+		return 0, "", "", false
+	}
+	return minInt(100, int(math.Round(rawScore*20))), fmt.Sprintf("%.1f/5", rawScore), strings.TrimSpace(fmt.Sprint(advisoryObj["message"])), true
+}
+
+func (h *Handlers) fetchDisasterSignals(ctx context.Context, city models.CitySelection) (events int, quakeCount int, ok bool) {
+	const eonetURL = "https://eonet.gsfc.nasa.gov/api/v3/events?status=open&days=30&limit=150"
+	body, err := h.fetchJSON(ctx, eonetURL)
+	if err == nil {
+		var payload struct {
+			Events []struct {
+				Geometry []struct {
+					Coordinates []float64 `json:"coordinates"`
+				} `json:"geometry"`
+			} `json:"events"`
+		}
+		if json.Unmarshal(body, &payload) == nil {
+			for _, ev := range payload.Events {
+				for _, g := range ev.Geometry {
+					if len(g.Coordinates) >= 2 {
+						lon := g.Coordinates[0]
+						lat := g.Coordinates[1]
+						if haversineKm(city.Lat, city.Lon, lat, lon) <= 600 {
+							events++
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	quakeBody, quakeErr := h.fetchJSON(ctx, fmt.Sprintf(
+		"https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&latitude=%.4f&longitude=%.4f&maxradiuskm=500&orderby=time&starttime=%s",
+		city.Lat,
+		city.Lon,
+		time.Now().Add(-7*24*time.Hour).UTC().Format("2006-01-02"),
+	))
+	if quakeErr == nil {
+		var payload struct {
+			Features []json.RawMessage `json:"features"`
+		}
+		if json.Unmarshal(quakeBody, &payload) == nil {
+			quakeCount = len(payload.Features)
+		}
+	}
+	return events, quakeCount, events > 0 || quakeCount > 0
+}
+
+func (h *Handlers) fetchGDELTMentions(ctx context.Context, query string) (int, bool) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return 0, false
+	}
+	u := "https://api.gdeltproject.org/api/v2/doc/doc?mode=ArtList&format=json&maxrecords=60&query=" + url.QueryEscape(query+" AND sourcelang:english")
+	body, err := h.fetchJSON(ctx, u)
+	if err != nil {
+		return 0, false
+	}
+	var payload struct {
+		Articles []json.RawMessage `json:"articles"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return 0, false
+	}
+	return len(payload.Articles), true
+}
+
+func (h *Handlers) fetchJSON(ctx context.Context, endpoint string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	client := &http.Client{Timeout: 6 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+}
+
+func (h *Handlers) weightedRiskScore(components map[string]int) int {
+	if len(components) == 0 {
+		return 0
+	}
+	weights := map[string]float64{
+		"travel":   0.30,
+		"disaster": 0.30,
+		"crime":    0.20,
+		"conflict": 0.20,
+	}
+	totalWeight := 0.0
+	acc := 0.0
+	for k, v := range components {
+		w := weights[k]
+		if w <= 0 {
+			continue
+		}
+		totalWeight += w
+		acc += float64(v) * w
+	}
+	if totalWeight <= 0 {
+		return 0
+	}
+	return minInt(100, maxInt(0, int(math.Round(acc/totalWeight))))
+}
+
+func (h *Handlers) scoreFromRiskLabel(label string) int {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "critical":
+		return 90
+	case "high":
+		return 75
+	case "medium":
+		return 55
+	case "low":
+		return 30
+	default:
+		return 0
+	}
+}
+
+func (h *Handlers) labelFromScore(score int) string {
+	switch {
+	case score >= 85:
+		return "critical"
+	case score >= 65:
+		return "high"
+	case score >= 40:
+		return "medium"
+	default:
+		return "low"
+	}
+}
+
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return f
+	default:
+		return 0
+	}
+}
+
+func dedupeStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		k := strings.TrimSpace(v)
+		if k == "" {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, k)
+	}
+	return out
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func firstN(s string, n int) string {

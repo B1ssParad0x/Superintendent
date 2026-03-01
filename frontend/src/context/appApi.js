@@ -123,3 +123,15 @@ export async function getAIStatus() {
   const { data } = await api.get('/api/ai/status')
   return data
 }
+
+export async function getRiskSources(city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.get('/api/risk/sources', { params })
+  return data
+}
+
+export async function refreshAdvisory(city, forceAudio = false) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.post('/api/advisory/refresh', { force_audio: forceAudio }, { params })
+  return data
+}

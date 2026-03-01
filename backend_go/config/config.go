@@ -36,7 +36,7 @@ func Load() *Config {
 		AIWorkerURL:   getEnv("AI_WORKER_URL", "http://localhost:8001"),
 		GeminiAPIKey:  getEnv("GEMINI_API_KEY", ""),
 		GeminiModel:   getEnv("GEMINI_MODEL", "gemini-2.5-flash"),
-		GeminiTimeoutSec: parseInt(getEnv("GEMINI_TIMEOUT_SEC", "20"), 20),
+		GeminiTimeoutSec: parseInt(getEnv("GEMINI_TIMEOUT_SEC", "35"), 35),
 		EdgeAPIKey:    getEnv("EDGE_API_KEY", ""),
 		HostURL:       getEnv("HOST_URL", "http://localhost:8000"),
 		SolanaRPC:      getEnv("SOLANA_RPC", "https://api.devnet.solana.com"),

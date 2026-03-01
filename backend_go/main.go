@@ -67,6 +67,8 @@ func main() {
 		user.GET("/cities/search", h.SearchCities)
 		user.GET("/feeds/public", h.PublicFeeds)
 		user.GET("/ai/status", h.AIStatus)
+		user.GET("/risk/sources", h.RiskSources)
+		user.POST("/advisory/refresh", h.RefreshAdvisory)
 		user.GET("/logs", h.Logs)
 		user.POST("/chat/thread", h.CreateChatThread)
 		user.DELETE("/chat/thread/:id", h.DeleteChatThread)
@@ -89,7 +91,7 @@ func main() {
 		}
 		ticker := time.NewTicker(interval)
 		for range ticker.C {
-			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			cities := []models.CitySelection{{
 				CityID:      "default-city",
 				CityName:    "Default City",
@@ -116,9 +118,11 @@ func main() {
 				}
 			}
 			for _, city := range cities {
-				if err := h.RunCityCycle(ctx, city); err != nil {
+				cityCtx, cityCancel := context.WithTimeout(context.Background(), 45*time.Second)
+				if err := h.RunCityCycle(cityCtx, city); err != nil {
 					log.Printf("city cycle (%s): %v", city.CityID, err)
 				}
+				cityCancel()
 			}
 			cancel()
 		}

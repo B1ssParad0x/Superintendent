@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import AdvisoryCard from '../components/AdvisoryCard'
 import AudioPlayer from '../components/AudioPlayer'
 import MapView from '../components/MapView'
@@ -11,10 +11,12 @@ import {
   getChatMessages,
   getLogs,
   getPublicFeeds,
+  getRiskSources,
   getSessionCity,
   getStateByCity,
   getTelemetry,
   listChatThreads,
+  refreshAdvisory,
   searchCities,
   sendChatMessage,
   setSessionCity,
@@ -72,10 +74,11 @@ export default function Dashboard() {
   const [chatBusy, setChatBusy] = useState(false)
   const [chatError, setChatError] = useState('')
   const [cityError, setCityError] = useState('')
+  const [voiceBusy, setVoiceBusy] = useState(false)
+  const lastAutoVoiceSrcRef = useRef('')
 
   const summary = useAppState((s) => s.summary)
   const risk = useAppState((s) => s.risk)
-  const advisories = useAppState((s) => s.advisories)
   const setFromState = useAppState((s) => s.setFromState)
 
   const stateQuery = useFetch(() => getStateByCity(activeCity), 10_000, [activeCity?.city_id])
@@ -83,6 +86,7 @@ export default function Dashboard() {
   const logsQuery = useFetch(() => getLogs(activeCity), 20_000, [activeCity?.city_id])
   const feedsQuery = useFetch(() => getPublicFeeds(activeCity), 20_000, [activeCity?.city_id])
   const aiStatusQuery = useFetch(getAIStatus, 30_000, [])
+  const riskSignalsQuery = useFetch(() => getRiskSources(activeCity), 45_000, [activeCity?.city_id])
 
   useEffect(() => {
     let mounted = true
@@ -128,17 +132,15 @@ export default function Dashboard() {
     }
   }, [activeCity?.city_id])
 
-  useEffect(() => {
-    if (!stateQuery.data) return
-    const latestSummary = stateQuery.data.summary || 'System online. Awaiting data.'
-    const latestRisk =
-      advisories[0]?.risk ??
-      (logsQuery.data?.[0]?.summary?.toLowerCase()?.includes('critical') ? 95 : logsQuery.data?.[0] ? 65 : 30)
-    setFromState({ summary: latestSummary, risk: latestRisk })
-  }, [stateQuery.data, logsQuery.data, setFromState])
-
   const latestAudio = useMemo(() => logsQuery.data?.find((x) => x.audio_url)?.audio_url, [logsQuery.data])
   const latestDecision = useMemo(() => (logsQuery.data || [])[0] || null, [logsQuery.data])
+  const riskSignals = riskSignalsQuery.data?.signals?.risk_signals || null
+  const riskComponents = riskSignals?.components || {}
+  const liveRisk = useMemo(() => {
+    const score = Number(latestDecision?.risk_score)
+    if (Number.isFinite(score) && score >= 0) return Math.max(0, Math.min(100, score))
+    return riskToScore(latestDecision?.risk, risk)
+  }, [latestDecision?.risk_score, latestDecision?.risk, risk])
   const advisorySummary = useMemo(() => normalizeAdvisoryText(latestDecision?.summary || summary), [latestDecision?.summary, summary])
   const tickerText = useMemo(() => {
     const text = (logsQuery.data || [])
@@ -148,6 +150,31 @@ export default function Dashboard() {
       .join(' • ')
     return text || 'Awaiting advisories'
   }, [logsQuery.data])
+
+  useEffect(() => {
+    if (!stateQuery.data) return
+    const latestSummary = stateQuery.data.summary || 'System online. Awaiting data.'
+    setFromState({ summary: latestSummary, risk: liveRisk })
+  }, [stateQuery.data, liveRisk, setFromState])
+
+  useEffect(() => {
+    if (!latestAudio || voiceBusy) return
+    if (lastAutoVoiceSrcRef.current === latestAudio) return
+    lastAutoVoiceSrcRef.current = latestAudio
+    const probe = new Audio(latestAudio)
+    probe.preload = 'metadata'
+    probe.onloadedmetadata = async () => {
+      if (probe.duration > 0 && probe.duration < 3 && !voiceBusy) {
+        try {
+          setVoiceBusy(true)
+          await refreshAdvisory(activeCity, true)
+          await logsQuery.refresh()
+        } finally {
+          setVoiceBusy(false)
+        }
+      }
+    }
+  }, [latestAudio, activeCity?.city_id, logsQuery, voiceBusy])
 
   useEffect(() => {
     if (!activeThread?.id) {
@@ -242,6 +269,18 @@ export default function Dashboard() {
     }
   }
 
+  async function onRefreshVoice(forceAudio = true) {
+    try {
+      setVoiceBusy(true)
+      await refreshAdvisory(activeCity, forceAudio)
+      await Promise.all([stateQuery.refresh(), logsQuery.refresh()])
+    } catch (err) {
+      setChatError(getErrorMessage(err))
+    } finally {
+      setVoiceBusy(false)
+    }
+  }
+
   return (
     <main className="mx-auto grid h-full w-full max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[1.8fr_1fr]">
       <section className="space-y-4">
@@ -286,7 +325,7 @@ export default function Dashboard() {
         </div>
         <AdvisoryCard
           summary={advisorySummary}
-          risk={riskToScore(latestDecision?.risk, risk)}
+          risk={liveRisk}
           actions={latestDecision?.actions || ['Monitor transit corridors', 'Stage EMS', 'Broadcast advisory']}
           forecast={latestDecision?.forecast || ''}
           confidence={typeof latestDecision?.confidence === 'number' ? latestDecision.confidence : null}
@@ -426,10 +465,19 @@ export default function Dashboard() {
       </section>
 
       <aside className="space-y-4">
-        <RiskGauge value={risk} />
-        <SystemMoodOrb risk={risk} />
+        <RiskGauge value={liveRisk} />
+        <SystemMoodOrb risk={liveRisk} />
         <section className="panel rounded-xl p-4">
-          <h3 className="mb-2 text-sm uppercase tracking-widest text-zinc-400">Voice Advisory</h3>
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm uppercase tracking-widest text-zinc-400">Voice Advisory</h3>
+            <button
+              onClick={() => onRefreshVoice(true)}
+              disabled={voiceBusy}
+              className="rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-200 disabled:opacity-50"
+            >
+              {voiceBusy ? 'Refreshing...' : 'Refresh Voice'}
+            </button>
+          </div>
           <AudioPlayer src={latestAudio} />
         </section>
         <section className="panel rounded-xl p-4">
@@ -437,6 +485,28 @@ export default function Dashboard() {
           <p className="text-xs text-zinc-500">Status: {stateQuery.data?.status || 'operational'}</p>
           <p className="text-xs text-zinc-500">Alerts committed: {stateQuery.data?.alerts ?? 0}</p>
           {stateQuery.error && <p className="mt-2 text-xs text-red-400">{stateQuery.error}</p>}
+        </section>
+        <section className="panel rounded-xl p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h3 className="text-sm uppercase tracking-widest text-zinc-400">Risk Source Matrix</h3>
+            <button onClick={riskSignalsQuery.refresh} className="rounded border border-zinc-700 px-2 py-1 text-[11px] text-zinc-200">
+              Refresh
+            </button>
+          </div>
+          {riskSignalsQuery.error && <p className="text-xs text-zinc-500">Signals are warming up for this city.</p>}
+          {!riskSignalsQuery.error && !riskSignals && <p className="text-xs text-zinc-500">No matrix available yet.</p>}
+          {riskSignals && (
+            <div className="space-y-2 text-xs">
+              <p className="text-zinc-300">Composite score: {riskSignals.score ?? riskSignalsQuery.data?.signals?.risk_signal_score ?? '--'}/100</p>
+              <p className="text-zinc-500">Travel advisory: {riskSignals.travel_level || 'n/a'}</p>
+              <p className="text-zinc-500">Disaster events (30d): {riskSignals.disaster_events_30d ?? 0}</p>
+              <p className="text-zinc-500">Crime mentions (72h): {riskSignals.crime_mentions_72h ?? 0}</p>
+              <p className="text-zinc-500">Conflict mentions (72h): {riskSignals.conflict_mentions_72h ?? 0}</p>
+              <p className="text-zinc-500">
+                Component scores: T {riskComponents.travel ?? 0} · D {riskComponents.disaster ?? 0} · C {riskComponents.crime ?? 0} · X {riskComponents.conflict ?? 0}
+              </p>
+            </div>
+          )}
         </section>
       </aside>
     </main>

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,6 +30,7 @@ type Client struct {
 type ReasonResult struct {
 	Summary   string
 	Risk      string
+	RiskScore int
 	Actions   map[string]string
 	Forecast  string
 	Confidence int
@@ -66,6 +68,7 @@ func (c *Client) Reason(ctx context.Context, cityName, telemetrySummary string, 
 		return ReasonResult{
 			Summary:   "AI reasoning is not configured.",
 			Risk:      "low",
+			RiskScore: 20,
 			Actions:   map[string]string{"conservative": "Set GEMINI_API_KEY.", "aggressive": "Configure Gemini model."},
 			AudioText: "AI reasoning is offline.",
 			Explain:   "Missing GEMINI_API_KEY.",
@@ -123,7 +126,7 @@ func (c *Client) generate(ctx context.Context, prompt string) (string, error) {
 
 	errs := make([]string, 0, len(candidates))
 	for _, model := range candidates {
-		text, err := c.generateWithModel(ctx, model, prompt)
+		text, err := c.generateWithRetries(ctx, model, prompt)
 		if err == nil {
 			// Persist successful model to avoid future fallback probes.
 			c.setModel(model)
@@ -138,6 +141,30 @@ func (c *Client) generate(ctx context.Context, prompt string) (string, error) {
 	return "", fmt.Errorf("gemini model resolution failed: %s", strings.Join(errs, " | "))
 }
 
+func (c *Client) generateWithRetries(ctx context.Context, model, prompt string) (string, error) {
+	var lastErr error
+	const attempts = 3
+	for i := 0; i < attempts; i++ {
+		text, err := c.generateWithModel(ctx, model, prompt)
+		if err == nil {
+			return text, nil
+		}
+		lastErr = err
+		if !isRetryableGeminiError(err) || ctx.Err() != nil || i == attempts-1 {
+			break
+		}
+		backoff := time.Duration(350*(i+1)) * time.Millisecond
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return "", lastErr
+}
+
 func (c *Client) generateWithModel(ctx context.Context, model, prompt string) (string, error) {
 	reqBody := map[string]interface{}{
 		"contents": []map[string]interface{}{
@@ -146,6 +173,11 @@ func (c *Client) generateWithModel(ctx context.Context, model, prompt string) (s
 					{"text": prompt},
 				},
 			},
+		},
+		"generationConfig": map[string]interface{}{
+			"temperature":      0.2,
+			"maxOutputTokens":  420,
+			"candidateCount":   1,
 		},
 	}
 	b, _ := json.Marshal(reqBody)
@@ -181,6 +213,25 @@ func (c *Client) generateWithModel(ctx context.Context, model, prompt string) (s
 		return "", fmt.Errorf("empty gemini response")
 	}
 	return strings.TrimSpace(out.Candidates[0].Content.Parts[0].Text), nil
+}
+
+func isRetryableGeminiError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "context deadline exceeded") {
+		return true
+	}
+	return strings.Contains(msg, "status 429") ||
+		strings.Contains(msg, "status 500") ||
+		strings.Contains(msg, "status 502") ||
+		strings.Contains(msg, "status 503") ||
+		strings.Contains(msg, "status 504") ||
+		strings.Contains(msg, "timeout")
 }
 
 func normalizeModelName(model string) string {
@@ -244,16 +295,17 @@ Recent decisions:
 
 Respond with VALID JSON only:
 {
-  "summary": "1-2 sentence executive summary",
+  "summary": "2-3 sentence executive summary grounded in telemetry and risk signals",
   "risk": "low|medium|high",
+  "risk_score": 0,
   "actions": {
     "conservative": "Cautious action",
     "aggressive": "Assertive action"
   },
-  "forecast": "1-2 sentence near-term forecast for the next 1-3 hours",
+  "forecast": "Include three horizons (30m, 3h, 12h) and one leading indicator to watch",
   "confidence": 0,
   "audio_text": "1-2 sentence spoken advisory",
-  "explain": "short technical reasoning"
+  "explain": "short technical reasoning with top 2 signal drivers and uncertainty"
 }`, cityName, telemetrySummary, strings.Join(recentDecisions, "\n- "))
 }
 
@@ -283,6 +335,7 @@ func parseReasonJSON(text string) ReasonResult {
 	var parsed struct {
 		Summary   string            `json:"summary"`
 		Risk      string            `json:"risk"`
+		RiskScore int               `json:"risk_score"`
 		Actions   map[string]string `json:"actions"`
 		Forecast  string            `json:"forecast"`
 		Confidence int              `json:"confidence"`
@@ -298,6 +351,7 @@ func parseReasonJSON(text string) ReasonResult {
 		return ReasonResult{
 			Summary:   firstN(looseSummary, 220),
 			Risk:      "medium",
+			RiskScore: 55,
 			Actions:   map[string]string{"conservative": "Review AI output.", "aggressive": "Retry generation."},
 			Forecast:  firstN(looseForecast, 180),
 			AudioText: "Unable to produce a structured advisory.",
@@ -310,9 +364,30 @@ func parseReasonJSON(text string) ReasonResult {
 	if parsed.Risk == "" {
 		parsed.Risk = "medium"
 	}
+	if parsed.RiskScore <= 0 {
+		switch strings.ToLower(parsed.Risk) {
+		case "critical":
+			parsed.RiskScore = 95
+		case "high":
+			parsed.RiskScore = 82
+		case "medium":
+			parsed.RiskScore = 58
+		case "low":
+			parsed.RiskScore = 28
+		default:
+			parsed.RiskScore = 45
+		}
+	}
+	if parsed.RiskScore < 0 {
+		parsed.RiskScore = 0
+	}
+	if parsed.RiskScore > 100 {
+		parsed.RiskScore = 100
+	}
 	return ReasonResult{
 		Summary:   parsed.Summary,
 		Risk:      parsed.Risk,
+		RiskScore: parsed.RiskScore,
 		Actions:   parsed.Actions,
 		Forecast:  parsed.Forecast,
 		Confidence: func(v int) int {

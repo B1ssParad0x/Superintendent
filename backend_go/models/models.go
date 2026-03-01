@@ -36,6 +36,7 @@ type Decision struct {
 	AudioURL    string    `json:"audio_url" bson:"audio_url"`
 	SolanaTx    string    `json:"solana_tx" bson:"solana_tx"`
 	Risk        string    `json:"risk,omitempty" bson:"risk,omitempty"`
+	RiskScore   int       `json:"risk_score,omitempty" bson:"risk_score,omitempty"`
 	Actions     map[string]string `json:"actions,omitempty" bson:"actions,omitempty"`
 	Forecast    string    `json:"forecast,omitempty" bson:"forecast,omitempty"`
 	Confidence  int       `json:"confidence,omitempty" bson:"confidence,omitempty"`

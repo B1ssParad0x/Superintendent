@@ -1,22 +1,65 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import AdvisoryCard from '../components/AdvisoryCard'
 import AudioPlayer from '../components/AudioPlayer'
 import MapView from '../components/MapView'
 import RiskGauge from '../components/RiskGauge'
 import SystemMoodOrb from '../components/SystemMoodOrb'
-import { getState, getTelemetry, getLogs } from '../context/appApi'
+import {
+  createChatThread,
+  getChatMessages,
+  getLogs,
+  getSessionCity,
+  getStateByCity,
+  getTelemetry,
+  listChatThreads,
+  searchCities,
+  sendChatMessage,
+  setSessionCity,
+} from '../context/appApi'
 import { useAppState } from '../context/useAppState'
 import { useFetch } from '../hooks/useFetch'
 
 export default function Dashboard() {
+  const [activeCity, setActiveCity] = useState(null)
+  const [cityQuery, setCityQuery] = useState('')
+  const [cityResults, setCityResults] = useState([])
+  const [threads, setThreads] = useState([])
+  const [activeThread, setActiveThread] = useState(null)
+  const [messages, setMessages] = useState([])
+  const [messageInput, setMessageInput] = useState('')
+  const [chatBusy, setChatBusy] = useState(false)
+
   const summary = useAppState((s) => s.summary)
   const risk = useAppState((s) => s.risk)
   const advisories = useAppState((s) => s.advisories)
   const setFromState = useAppState((s) => s.setFromState)
 
-  const stateQuery = useFetch(getState, 10_000, [])
-  const telemetryQuery = useFetch(getTelemetry, 12_000, [])
-  const logsQuery = useFetch(getLogs, 20_000, [])
+  const stateQuery = useFetch(() => getStateByCity(activeCity), 10_000, [activeCity?.city_id])
+  const telemetryQuery = useFetch(() => getTelemetry(activeCity), 12_000, [activeCity?.city_id])
+  const logsQuery = useFetch(() => getLogs(activeCity), 20_000, [activeCity?.city_id])
+
+  useEffect(() => {
+    let mounted = true
+    ;(async () => {
+      try {
+        const city = await getSessionCity()
+        if (mounted) setActiveCity(city)
+      } catch {
+        // ignore
+      }
+      try {
+        const list = await listChatThreads()
+        if (!mounted) return
+        setThreads(list)
+        if (list[0]) setActiveThread(list[0])
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [])
 
   useEffect(() => {
     if (!stateQuery.data) return
@@ -37,9 +80,95 @@ export default function Dashboard() {
     return text || 'Awaiting advisories'
   }, [logsQuery.data])
 
+  useEffect(() => {
+    if (!activeThread?.id) {
+      setMessages([])
+      return
+    }
+    let mounted = true
+    ;(async () => {
+      try {
+        const list = await getChatMessages(activeThread.id)
+        if (mounted) setMessages(list)
+      } catch {
+        // ignore
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [activeThread?.id])
+
+  async function onSearchCity() {
+    if (cityQuery.trim().length < 2) return
+    const list = await searchCities(cityQuery.trim())
+    setCityResults(list)
+  }
+
+  async function onSelectCity(city) {
+    const saved = await setSessionCity(city)
+    setActiveCity(saved)
+    setCityResults([])
+    await Promise.all([stateQuery.refresh(), telemetryQuery.refresh(), logsQuery.refresh()])
+  }
+
+  async function onCreateThread() {
+    const thread = await createChatThread(`${activeCity?.city_name || 'City'} Ops`)
+    const list = [thread, ...threads]
+    setThreads(list)
+    setActiveThread(thread)
+  }
+
+  async function onSend() {
+    const content = messageInput.trim()
+    if (!content || !activeThread?.id || chatBusy) return
+    setChatBusy(true)
+    setMessageInput('')
+    try {
+      const resp = await sendChatMessage(activeThread.id, content)
+      setMessages((prev) => [...prev, resp.user, resp.assistant])
+      const refreshed = await listChatThreads()
+      setThreads(refreshed)
+    } finally {
+      setChatBusy(false)
+    }
+  }
+
   return (
     <main className="mx-auto grid h-full w-full max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[1.8fr_1fr]">
       <section className="space-y-4">
+        <div className="panel rounded-xl p-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs uppercase tracking-widest text-zinc-400">Active city</span>
+            <span className="rounded border border-crimson/40 px-2 py-1 text-xs text-zinc-200">
+              {activeCity?.city_name ? `${activeCity.city_name} (${activeCity.country_code || 'N/A'})` : 'Default City'}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <input
+              value={cityQuery}
+              onChange={(e) => setCityQuery(e.target.value)}
+              placeholder="Search city (e.g. Tokyo, Lagos, Sao Paulo)"
+              className="min-w-64 flex-1 rounded border border-zinc-700 bg-black/50 px-3 py-2 text-sm text-zinc-100"
+            />
+            <button onClick={onSearchCity} className="rounded border border-zinc-700 px-3 py-2 text-sm text-zinc-200">
+              Search
+            </button>
+          </div>
+          {cityResults.length > 0 && (
+            <div className="mt-2 max-h-44 overflow-auto rounded border border-zinc-800 bg-black/60">
+              {cityResults.map((city) => (
+                <button
+                  key={city.city_id}
+                  onClick={() => onSelectCity(city)}
+                  className="block w-full border-b border-zinc-900 px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900"
+                >
+                  {city.city_name}, {city.country} {city.region ? `· ${city.region}` : ''}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="panel rounded-xl p-3">
           <MapView telemetry={telemetryQuery.data || []} nodes={telemetryQuery.data || []} />
         </div>
@@ -50,6 +179,57 @@ export default function Dashboard() {
             <span>{tickerText} &#8226; </span>
           </div>
         </div>
+        <section className="panel rounded-xl p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm uppercase tracking-widest text-zinc-400">Operator AI Chat</h3>
+            <button onClick={onCreateThread} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200">
+              New Thread
+            </button>
+          </div>
+          <div className="mb-2 flex gap-2 overflow-auto">
+            {threads.map((thread) => (
+              <button
+                key={thread.id}
+                onClick={() => setActiveThread(thread)}
+                className={`rounded px-2 py-1 text-xs ${
+                  activeThread?.id === thread.id ? 'bg-crimson text-white' : 'border border-zinc-700 text-zinc-300'
+                }`}
+              >
+                {thread.title}
+              </button>
+            ))}
+          </div>
+          <div className="mb-2 h-44 overflow-auto rounded border border-zinc-800 bg-black/40 p-2 text-sm">
+            {messages.length === 0 ? (
+              <p className="text-zinc-500">Start a thread and ask about risks, mitigation, and city operations.</p>
+            ) : (
+              messages.map((m) => (
+                <div key={m.id} className="mb-2">
+                  <p className="text-xs uppercase tracking-wide text-zinc-500">{m.role}</p>
+                  <p className="whitespace-pre-wrap text-zinc-200">{m.content}</p>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={messageInput}
+              onChange={(e) => setMessageInput(e.target.value)}
+              placeholder="Ask AI about this city's situation..."
+              className="flex-1 rounded border border-zinc-700 bg-black/60 px-3 py-2 text-sm text-zinc-100"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') onSend()
+              }}
+            />
+            <button
+              onClick={onSend}
+              disabled={chatBusy || !activeThread}
+              className="rounded bg-crimson px-3 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {chatBusy ? '...' : 'Send'}
+            </button>
+          </div>
+        </section>
       </section>
 
       <aside className="space-y-4">

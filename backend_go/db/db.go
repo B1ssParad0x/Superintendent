@@ -12,6 +12,9 @@ import (
 var Client *mongo.Client
 var TelemetryCol *mongo.Collection
 var DecisionsCol *mongo.Collection
+var CitySessionsCol *mongo.Collection
+var ChatThreadsCol *mongo.Collection
+var ChatMessagesCol *mongo.Collection
 
 func Init(cfg *config.Config) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -26,6 +29,9 @@ func Init(cfg *config.Config) error {
 	db := client.Database("superintendent")
 	TelemetryCol = db.Collection("telemetry")
 	DecisionsCol = db.Collection("decisions")
+	CitySessionsCol = db.Collection("city_sessions")
+	ChatThreadsCol = db.Collection("chat_threads")
+	ChatMessagesCol = db.Collection("chat_messages")
 
 	return client.Ping(ctx, nil)
 }

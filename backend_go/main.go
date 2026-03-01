@@ -57,6 +57,18 @@ func main() {
 	if cfg.Auth0Domain != "" {
 		jwksURL = "https://" + cfg.Auth0Domain + "/.well-known/jwks.json"
 	}
+	user := r.Group("/api")
+	user.Use(auth.RequireUser(jwksURL))
+	{
+		user.GET("/session/city", h.GetSessionCity)
+		user.POST("/session/city", h.SetSessionCity)
+		user.GET("/cities/search", h.SearchCities)
+		user.POST("/chat/thread", h.CreateChatThread)
+		user.GET("/chat/threads", h.ListChatThreads)
+		user.GET("/chat/thread/:id/messages", h.GetChatMessages)
+		user.POST("/chat/thread/:id/message", h.PostChatMessage)
+	}
+
 	admin := r.Group("/api")
 	admin.Use(auth.RequireAdmin(jwksURL))
 	{

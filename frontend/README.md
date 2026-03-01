@@ -8,6 +8,8 @@ React + Vite client for The Superintendent.
 - Live dashboard polling `/api/state` every 10 seconds
 - Mapbox telemetry heatmap and node overlays from `/api/telemetry`
 - Protected logs and admin actions (`/api/logs`, `/api/reason`, `/api/commit`)
+- Single active city per user session with global city search
+- Persisted operator AI chat threads in the dashboard
 - Dark crimson theme with motion polish
 
 ## Environment Variables

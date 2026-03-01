@@ -2,17 +2,25 @@ package handlers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
+	"math/rand"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
 
+	"superintendent/backend/ai"
 	"superintendent/backend/auth"
 	"superintendent/backend/config"
 	"superintendent/backend/db"
+	"superintendent/backend/ingest"
 	"superintendent/backend/models"
 	"superintendent/backend/solana"
 	"superintendent/backend/worker"
@@ -20,17 +28,19 @@ import (
 
 type Handlers struct {
 	cfg    *config.Config
+	ai     *ai.Client
 	worker *worker.Client
 	solana *solana.Client
 }
 
 func New(cfg *config.Config) (*Handlers, error) {
 	w := worker.New(cfg.AIWorkerURL)
+	g := ai.New(cfg)
 	sc, err := solana.New(cfg.SolanaRPC, cfg.SolanaKeypair)
 	if err != nil {
 		return nil, err
 	}
-	return &Handlers{cfg: cfg, worker: w, solana: sc}, nil
+	return &Handlers{cfg: cfg, ai: g, worker: w, solana: sc}, nil
 }
 
 // Ingest handles POST /api/ingest - verify edge signature, store, enqueue AI
@@ -61,11 +71,14 @@ func (h *Handlers) Ingest(c *gin.Context) {
 	}
 
 	doc := models.Telemetry{
-		NodeID:    req.NodeID,
-		Ts:        time.Unix(req.Ts, 0),
-		Loc:       req.Loc,
-		Metrics:   req.Metrics,
-		Signature: req.Signature,
+		NodeID:      req.NodeID,
+		Ts:          time.Unix(req.Ts, 0),
+		Loc:         req.Loc,
+		Metrics:     req.Metrics,
+		Signature:   req.Signature,
+		CityID:      h.defaultCity().CityID,
+		CityName:    h.defaultCity().CityName,
+		CountryCode: h.defaultCity().CountryCode,
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
@@ -75,10 +88,9 @@ func (h *Handlers) Ingest(c *gin.Context) {
 	}
 
 	metricsJSON, _ := json.Marshal(req.Metrics)
+	activeCity := h.defaultCity()
 	go func() {
-		_, _ = h.worker.Reason(context.Background(), worker.ReasonRequest{
-			TelemetrySummary: string(metricsJSON),
-		})
+		_, _ = h.ai.Reason(context.Background(), activeCity.CityName, string(metricsJSON), nil)
 	}()
 
 	c.JSON(http.StatusOK, gin.H{"ok": true, "node_id": req.NodeID})
@@ -86,11 +98,14 @@ func (h *Handlers) Ingest(c *gin.Context) {
 
 // Reason handles POST /api/reason - admin only, triggers AI reasoning
 func (h *Handlers) Reason(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
 	// Fetch recent telemetry for context
-	cur, err := db.TelemetryCol.Find(ctx, bson.M{},
+	cur, err := db.TelemetryCol.Find(ctx, h.cityFilter(activeCity.CityID),
 		options.Find().SetSort(bson.D{{Key: "ts", Value: -1}}).SetLimit(10))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to fetch telemetry"})
@@ -103,11 +118,12 @@ func (h *Handlers) Reason(c *gin.Context) {
 	}
 	summary := "No recent telemetry."
 	if len(t) > 0 {
-		b, _ := json.Marshal(t[0].Metrics)
+		b, _ := json.Marshal(t)
 		summary = string(b)
 	}
 
-	resp, err := h.worker.Reason(ctx, worker.ReasonRequest{TelemetrySummary: summary})
+	recentDecisions := h.getRecentDecisionSummaries(ctx, activeCity.CityID, 5)
+	resp, err := h.ai.Reason(ctx, activeCity.CityName, summary, recentDecisions)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -115,7 +131,7 @@ func (h *Handlers) Reason(c *gin.Context) {
 
 	// Optionally generate audio
 	audioURL := ""
-	if resp.AudioText != "" {
+	if resp.AudioText != "" && h.worker != nil {
 		audioURL, _ = h.worker.Speak(ctx, resp.AudioText)
 	}
 
@@ -140,7 +156,9 @@ func (h *Handlers) Commit(c *gin.Context) {
 		return
 	}
 
-	hash := auth.HashForSolana(body.Summary)
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	hash := auth.HashForSolana(body.Summary + "|" + activeCity.CityID)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
@@ -151,11 +169,14 @@ func (h *Handlers) Commit(c *gin.Context) {
 	}
 
 	doc := models.Decision{
-		When:     time.Now(),
-		Summary:  body.Summary,
-		Hash:     hash,
-		AudioURL: body.AudioURL,
-		SolanaTx: txSig,
+		When:        time.Now(),
+		Summary:     body.Summary,
+		Hash:        hash,
+		AudioURL:    body.AudioURL,
+		SolanaTx:    txSig,
+		CityID:      activeCity.CityID,
+		CityName:    activeCity.CityName,
+		CountryCode: activeCity.CountryCode,
 	}
 	if _, err := db.DecisionsCol.InsertOne(ctx, doc); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store decision"})
@@ -169,7 +190,12 @@ func (h *Handlers) Commit(c *gin.Context) {
 func (h *Handlers) Telemetry(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
-	cur, err := db.TelemetryCol.Find(ctx, bson.M{},
+	cityID := c.Query("city_id")
+	filter := bson.M{}
+	if cityID != "" {
+		filter = h.cityFilter(cityID)
+	}
+	cur, err := db.TelemetryCol.Find(ctx, filter,
 		options.Find().SetSort(bson.D{{Key: "ts", Value: -1}}).SetLimit(500))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -207,14 +233,16 @@ func (h *Handlers) EdgeAudios(c *gin.Context) {
 
 // State handles GET /api/state - public city status
 func (h *Handlers) State(c *gin.Context) {
+	activeCity := h.cityFromRequest(c)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
-	count, _ := db.TelemetryCol.CountDocuments(ctx, bson.M{})
-	decCount, _ := db.DecisionsCol.CountDocuments(ctx, bson.M{})
+	filter := h.cityFilter(activeCity.CityID)
+	count, _ := db.TelemetryCol.CountDocuments(ctx, filter)
+	decCount, _ := db.DecisionsCol.CountDocuments(ctx, filter)
 
 	summary := ""
 	var latest models.Decision
-	if err := db.DecisionsCol.FindOne(ctx, bson.M{},
+	if err := db.DecisionsCol.FindOne(ctx, filter,
 		options.FindOne().SetSort(bson.D{{Key: "when", Value: -1}})).Decode(&latest); err == nil && latest.Summary != "" {
 		summary = latest.Summary
 	}
@@ -230,15 +258,20 @@ func (h *Handlers) State(c *gin.Context) {
 		Updated: time.Now(),
 		Alerts:  int(decCount),
 		Summary: summary,
+		CityID:  activeCity.CityID,
+		CityName: activeCity.CityName,
+		CountryCode: activeCity.CountryCode,
 	})
 	_ = count
 }
 
 // Logs handles GET /api/logs - admin only, decision history
 func (h *Handlers) Logs(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
-	cur, err := db.DecisionsCol.Find(ctx, bson.M{},
+	cur, err := db.DecisionsCol.Find(ctx, h.cityFilter(activeCity.CityID),
 		options.Find().SetSort(bson.D{{Key: "when", Value: -1}}).SetLimit(100))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -250,4 +283,312 @@ func (h *Handlers) Logs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"decisions": decisions})
+}
+
+// SearchCities provides global city lookup using Open-Meteo geocoding.
+func (h *Handlers) SearchCities(c *gin.Context) {
+	q := strings.TrimSpace(c.Query("q"))
+	if len(q) < 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "q must be at least 2 characters"})
+		return
+	}
+	u := "https://geocoding-api.open-meteo.com/v1/search?count=8&language=en&format=json&name=" + url.QueryEscape(q)
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodGet, u, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "city provider unavailable"})
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "city provider error"})
+		return
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var payload struct {
+		Results []struct {
+			ID          int64   `json:"id"`
+			Name        string  `json:"name"`
+			CountryCode string  `json:"country_code"`
+			Country     string  `json:"country"`
+			Admin1      string  `json:"admin1"`
+			Latitude    float64 `json:"latitude"`
+			Longitude   float64 `json:"longitude"`
+		} `json:"results"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid city response"})
+		return
+	}
+	out := make([]gin.H, 0, len(payload.Results))
+	for _, r := range payload.Results {
+		cityID := fmt.Sprintf("%d", r.ID)
+		if cityID == "0" {
+			cityID = strings.ToLower(fmt.Sprintf("%s-%s", strings.ReplaceAll(r.Name, " ", "-"), r.CountryCode))
+		}
+		out = append(out, gin.H{
+			"city_id":      cityID,
+			"city_name":    r.Name,
+			"country_code": r.CountryCode,
+			"country":      r.Country,
+			"region":       r.Admin1,
+			"lat":          r.Latitude,
+			"lon":          r.Longitude,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"cities": out})
+}
+
+func (h *Handlers) GetSessionCity(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	city, err := h.getActiveCity(c.Request.Context(), principalID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load city"})
+		return
+	}
+	c.JSON(http.StatusOK, city)
+}
+
+func (h *Handlers) SetSessionCity(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	var req models.CitySelection
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.CityID == "" || req.CityName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "city_id and city_name are required"})
+		return
+	}
+	req.PrincipalID = principalID
+	req.UpdatedAt = time.Now()
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	_, err := db.CitySessionsCol.UpdateOne(ctx,
+		bson.M{"principal_id": principalID},
+		bson.M{"$set": req},
+		options.Update().SetUpsert(true),
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save city"})
+		return
+	}
+	go func(city models.CitySelection) {
+		bg, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		_ = ingest.RunForCity(bg, h.cfg, city)
+	}(req)
+	c.JSON(http.StatusOK, req)
+}
+
+func (h *Handlers) CreateChatThread(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	var req struct {
+		Title string `json:"title"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	now := time.Now()
+	thread := models.ChatThread{
+		ID:          h.newID("thr"),
+		PrincipalID: principalID,
+		Title:       strings.TrimSpace(req.Title),
+		CityID:      activeCity.CityID,
+		CityName:    activeCity.CityName,
+		CountryCode: activeCity.CountryCode,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if thread.Title == "" {
+		thread.Title = "New thread"
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	if _, err := db.ChatThreadsCol.InsertOne(ctx, thread); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create thread"})
+		return
+	}
+	c.JSON(http.StatusOK, thread)
+}
+
+func (h *Handlers) ListChatThreads(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	cur, err := db.ChatThreadsCol.Find(ctx, bson.M{"principal_id": principalID}, options.Find().SetSort(bson.D{{Key: "updated_at", Value: -1}}).SetLimit(50))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list threads"})
+		return
+	}
+	var threads []models.ChatThread
+	if err := cur.All(ctx, &threads); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode threads"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"threads": threads})
+}
+
+func (h *Handlers) GetChatMessages(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	threadID := c.Param("id")
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+	defer cancel()
+	if err := db.ChatThreadsCol.FindOne(ctx, bson.M{"id": threadID, "principal_id": principalID}).Err(); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread not found"})
+		return
+	}
+	cur, err := db.ChatMessagesCol.Find(ctx, bson.M{"thread_id": threadID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: 1}}).SetLimit(400))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to read messages"})
+		return
+	}
+	var messages []models.ChatMessage
+	if err := cur.All(ctx, &messages); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode messages"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"messages": messages})
+}
+
+func (h *Handlers) PostChatMessage(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	threadID := c.Param("id")
+	var req struct {
+		Content string `json:"content" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+	var thread models.ChatThread
+	if err := db.ChatThreadsCol.FindOne(ctx, bson.M{"id": threadID, "principal_id": principalID}).Decode(&thread); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "thread not found"})
+		return
+	}
+
+	userMsg := models.ChatMessage{
+		ID:        h.newID("msg"),
+		ThreadID:  threadID,
+		Role:      "user",
+		Content:   strings.TrimSpace(req.Content),
+		CreatedAt: time.Now(),
+	}
+	if _, err := db.ChatMessagesCol.InsertOne(ctx, userMsg); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save message"})
+		return
+	}
+
+	cur, err := db.ChatMessagesCol.Find(ctx, bson.M{"thread_id": threadID}, options.Find().SetSort(bson.D{{Key: "created_at", Value: -1}}).SetLimit(8))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to load context"})
+		return
+	}
+	var recent []models.ChatMessage
+	if err := cur.All(ctx, &recent); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode context"})
+		return
+	}
+	msgs := make([]string, 0, len(recent))
+	for i := len(recent) - 1; i >= 0; i-- {
+		msgs = append(msgs, fmt.Sprintf("%s: %s", recent[i].Role, recent[i].Content))
+	}
+	aiText, err := h.ai.Chat(ctx, thread.CityName, msgs, userMsg.Content)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	assistant := models.ChatMessage{
+		ID:        h.newID("msg"),
+		ThreadID:  threadID,
+		Role:      "assistant",
+		Content:   aiText,
+		CreatedAt: time.Now(),
+	}
+	if _, err := db.ChatMessagesCol.InsertOne(ctx, assistant); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save assistant message"})
+		return
+	}
+	_, _ = db.ChatThreadsCol.UpdateOne(ctx, bson.M{"id": threadID, "principal_id": principalID}, bson.M{"$set": bson.M{"updated_at": assistant.CreatedAt}})
+	c.JSON(http.StatusOK, gin.H{"user": userMsg, "assistant": assistant})
+}
+
+func (h *Handlers) getRecentDecisionSummaries(ctx context.Context, cityID string, limit int64) []string {
+	cur, err := db.DecisionsCol.Find(ctx, h.cityFilter(cityID), options.Find().SetSort(bson.D{{Key: "when", Value: -1}}).SetLimit(limit))
+	if err != nil {
+		return nil
+	}
+	var decisions []models.Decision
+	if err := cur.All(ctx, &decisions); err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(decisions))
+	for _, d := range decisions {
+		out = append(out, d.Summary)
+	}
+	return out
+}
+
+func (h *Handlers) newID(prefix string) string {
+	r := make([]byte, 4)
+	_, _ = rand.Read(r)
+	return fmt.Sprintf("%s_%d_%s", prefix, time.Now().UnixNano(), base64.RawURLEncoding.EncodeToString(r))
+}
+
+func (h *Handlers) getPrincipalID(c *gin.Context) string {
+	v, ok := c.Get("claims")
+	if !ok {
+		return "public"
+	}
+	claims, ok := v.(*auth.Claims)
+	if !ok || claims.Sub == "" {
+		return "public"
+	}
+	return claims.Sub
+}
+
+func (h *Handlers) defaultCity() models.CitySelection {
+	return models.CitySelection{
+		CityID:      "default-city",
+		CityName:    "Default City",
+		CountryCode: "UN",
+		Lat:         h.cfg.IngestLat,
+		Lon:         h.cfg.IngestLon,
+	}
+}
+
+func (h *Handlers) getActiveCity(ctx context.Context, principalID string) (models.CitySelection, error) {
+	if principalID == "" || principalID == "public" {
+		return h.defaultCity(), nil
+	}
+	var city models.CitySelection
+	err := db.CitySessionsCol.FindOne(ctx, bson.M{"principal_id": principalID}).Decode(&city)
+	if err != nil {
+		return h.defaultCity(), nil
+	}
+	return city, nil
+}
+
+func (h *Handlers) cityFromRequest(c *gin.Context) models.CitySelection {
+	cityID := strings.TrimSpace(c.Query("city_id"))
+	if cityID == "" {
+		return h.defaultCity()
+	}
+	return models.CitySelection{
+		CityID:      cityID,
+		CityName:    strings.TrimSpace(c.Query("city_name")),
+		CountryCode: strings.TrimSpace(c.Query("country_code")),
+	}
+}
+
+func (h *Handlers) cityFilter(cityID string) bson.M {
+	if cityID == "" || cityID == "default-city" {
+		return bson.M{"$or": []bson.M{{"city_id": cityID}, {"city_id": bson.M{"$exists": false}}}}
+	}
+	return bson.M{"city_id": cityID}
 }

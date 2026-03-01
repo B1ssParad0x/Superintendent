@@ -5,23 +5,33 @@ export async function getState() {
   return data
 }
 
-export async function getTelemetry() {
-  const { data } = await api.get('/api/telemetry')
-  return data?.telemetry || []
-}
-
-export async function getLogs() {
-  const { data } = await api.get('/api/logs')
-  return data?.decisions || []
-}
-
-export async function triggerReason() {
-  const { data } = await api.post('/api/reason', {})
+export async function getStateByCity(city) {
+  const params = city?.city_id ? { city_id: city.city_id, city_name: city.city_name, country_code: city.country_code } : undefined
+  const { data } = await api.get('/api/state', { params })
   return data
 }
 
-export async function commitDecision(summary, audioUrl = '') {
-  const { data } = await api.post('/api/commit', { summary, audio_url: audioUrl })
+export async function getTelemetry(city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.get('/api/telemetry', { params })
+  return data?.telemetry || []
+}
+
+export async function getLogs(city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.get('/api/logs', { params })
+  return data?.decisions || []
+}
+
+export async function triggerReason(city) {
+  const params = city?.city_id ? { city_id: city.city_id } : undefined
+  const { data } = await api.post('/api/reason', {}, { params })
+  return data
+}
+
+export async function commitDecision(summary, audioUrl = '', city) {
+  const payload = { summary, audio_url: audioUrl, city_id: city?.city_id || '' }
+  const { data } = await api.post('/api/commit', payload)
   return data
 }
 
@@ -56,4 +66,39 @@ export async function getNodes() {
       risk: inferRisk(JSON.stringify(node.metrics || {})),
     }
   })
+}
+
+export async function searchCities(query) {
+  const { data } = await api.get('/api/cities/search', { params: { q: query } })
+  return data?.cities || []
+}
+
+export async function getSessionCity() {
+  const { data } = await api.get('/api/session/city')
+  return data
+}
+
+export async function setSessionCity(city) {
+  const { data } = await api.post('/api/session/city', city)
+  return data
+}
+
+export async function listChatThreads() {
+  const { data } = await api.get('/api/chat/threads')
+  return data?.threads || []
+}
+
+export async function createChatThread(title = '') {
+  const { data } = await api.post('/api/chat/thread', { title })
+  return data
+}
+
+export async function getChatMessages(threadId) {
+  const { data } = await api.get(`/api/chat/thread/${encodeURIComponent(threadId)}/messages`)
+  return data?.messages || []
+}
+
+export async function sendChatMessage(threadId, content) {
+  const { data } = await api.post(`/api/chat/thread/${encodeURIComponent(threadId)}/message`, { content })
+  return data
 }

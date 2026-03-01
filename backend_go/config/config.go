@@ -13,6 +13,9 @@ type Config struct {
 	Auth0Domain   string
 	Auth0Audience string
 	AIWorkerURL   string
+	GeminiAPIKey  string
+	GeminiModel   string
+	GeminiTimeoutSec int
 	EdgeAPIKey    string
 	HostURL       string
 	SolanaRPC     string
@@ -30,6 +33,9 @@ func Load() *Config {
 		Auth0Domain:   getEnv("AUTH0_DOMAIN", ""),
 		Auth0Audience: getEnv("AUTH0_AUDIENCE", ""),
 		AIWorkerURL:   getEnv("AI_WORKER_URL", "http://localhost:8001"),
+		GeminiAPIKey:  getEnv("GEMINI_API_KEY", ""),
+		GeminiModel:   getEnv("GEMINI_MODEL", "gemini-1.5-flash"),
+		GeminiTimeoutSec: parseInt(getEnv("GEMINI_TIMEOUT_SEC", "20"), 20),
 		EdgeAPIKey:    getEnv("EDGE_API_KEY", ""),
 		HostURL:       getEnv("HOST_URL", "http://localhost:8000"),
 		SolanaRPC:      getEnv("SOLANA_RPC", "https://api.devnet.solana.com"),
@@ -62,6 +68,14 @@ func parseEdgePubkeys(s string) map[string][]byte {
 
 func parseFloat(s string, def float64) float64 {
 	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return def
+	}
+	return v
+}
+
+func parseInt(s string, def int) int {
+	v, err := strconv.Atoi(s)
 	if err != nil {
 		return def
 	}

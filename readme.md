@@ -17,6 +17,7 @@ The project fuses AI, blockchain auditing, and edge computing to build a secure,
 - **Live Data Ingestion:** Integrates public APIs such as weather and civic service feeds.
 - **AI Reasoning:** Uses a large language model to interpret data, identify trends, and propose actions.
 - **Natural Voice Output:** Generates expressive audio advisories for human operators.
+- **Operator AI Chat:** Persistent city-aware chat threads for live operations.
 - **Immutable Logging:** Records critical decisions on the Solana devnet blockchain for transparency.
 - **Edge Device Integration:** Raspberry Pi acts as a secure edge node that signs telemetry and caches local data.
 - **Secure Authentication:** Protected by Auth0 JWT and cryptographic signing for data integrity.
@@ -70,6 +71,8 @@ Copy `.env.example` to `.env` and configure:
 | `AUTH0_CLIENT_ID` | SPA client ID |
 | `MONGO_URI` | MongoDB connection (default: `mongodb://mongo:27017` in Docker) |
 | `GEMINI_API_KEY` | Google Gemini API key |
+| `GEMINI_MODEL` | Gemini model name (default: `gemini-1.5-flash`) |
+| `GEMINI_TIMEOUT_SEC` | Gemini request timeout (seconds) |
 | `ELEVEN_API_KEY` | ElevenLabs API key |
 | `ELEVEN_VOICE_ID` | ElevenLabs voice ID |
 | `SOLANA_KEYPAIR_JSON` | Base64 or JSON array keypair for devnet |
@@ -135,6 +138,15 @@ SUPER_API=http://your-backend:8000 EDGE_ID=pi-001 ./edge
 3. AI Worker analyzes trends and generates summaries and advisories.
 4. Admin commits key decisions to Solana for audit.
 5. Dashboard displays current state, voice advisories, and blockchain proof.
+
+---
+
+## City Session + Chat APIs
+
+- `GET /api/cities/search?q=` - global city lookup.
+- `GET /api/session/city` and `POST /api/session/city` - active city per user session.
+- `POST /api/chat/thread` and `GET /api/chat/threads` - chat thread lifecycle.
+- `GET /api/chat/thread/:id/messages` and `POST /api/chat/thread/:id/message` - persisted operator chat.
 
 ---
 

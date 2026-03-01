@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"superintendent/backend/config"
@@ -21,9 +22,21 @@ const (
 
 // Run fetches NYC 311 and OpenWeather data, merges into metrics, and stores as telemetry
 func Run(ctx context.Context, cfg *config.Config) error {
+	city := models.CitySelection{
+		CityID:      "default-city",
+		CityName:    "Default City",
+		CountryCode: "UN",
+		Lat:         cfg.IngestLat,
+		Lon:         cfg.IngestLon,
+	}
+	return RunForCity(ctx, cfg, city)
+}
+
+// RunForCity fetches telemetry for a specific city context.
+func RunForCity(ctx context.Context, cfg *config.Config, city models.CitySelection) error {
 	metrics := make(map[string]interface{})
 	ts := time.Now().Unix()
-	loc := models.Location{Lat: cfg.IngestLat, Lon: cfg.IngestLon}
+	loc := models.Location{Lat: city.Lat, Lon: city.Lon}
 
 	if cfg.OpenWeatherKey != "" {
 		weather, err := fetchOpenWeather(ctx, cfg.OpenWeatherKey, loc.Lat, loc.Lon)
@@ -34,10 +47,12 @@ func Run(ctx context.Context, cfg *config.Config) error {
 		}
 	}
 
-	complaints, err := fetchNYC311(ctx, 24*time.Hour)
-	if err == nil {
-		metrics["nyc311_last24h"] = len(complaints)
-		metrics["nyc311_sample"] = complaints
+	if strings.EqualFold(city.CountryCode, "US") && strings.Contains(strings.ToLower(city.CityName), "new york") {
+		complaints, err := fetchNYC311(ctx, 24*time.Hour)
+		if err == nil {
+			metrics["nyc311_last24h"] = len(complaints)
+			metrics["nyc311_sample"] = complaints
+		}
 	}
 
 	if len(metrics) == 0 {
@@ -45,15 +60,22 @@ func Run(ctx context.Context, cfg *config.Config) error {
 	}
 
 	metrics["timestamp"] = ts
+	metrics["city_name"] = city.CityName
+	metrics["country_code"] = city.CountryCode
 	doc := models.Telemetry{
-		NodeID:    "api-ingest-001",
-		Ts:        time.Unix(ts, 0),
-		Loc:       loc,
-		Metrics:   metrics,
-		Signature: "server-ingest",
+		NodeID:      "api-ingest-001",
+		Ts:          time.Unix(ts, 0),
+		Loc:         loc,
+		Metrics:     metrics,
+		Signature:   "server-ingest",
+		CityID:      city.CityID,
+		CityName:    city.CityName,
+		CountryCode: city.CountryCode,
 	}
-	_, err = db.TelemetryCol.InsertOne(ctx, doc)
-	return err
+	if _, err := db.TelemetryCol.InsertOne(ctx, doc); err != nil {
+		return err
+	}
+	return nil
 }
 
 func fetchOpenWeather(ctx context.Context, apiKey string, lat, lon float64) (map[string]interface{}, error) {

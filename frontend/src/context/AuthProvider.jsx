@@ -1,5 +1,5 @@
 import { Auth0Provider, useAuth0 } from '@auth0/auth0-react'
-import { createContext, useContext, useEffect, useMemo } from 'react'
+import { createContext, useContext, useEffect, useMemo, useState } from 'react'
 import { setTokenGetter } from './apiClient'
 
 const AuthContext = createContext(null)
@@ -20,14 +20,48 @@ function parseRoles(user) {
   return ['viewer']
 }
 
+function parseRolesFromAccessToken(token) {
+  if (!token || typeof token !== 'string') return []
+  const parts = token.split('.')
+  if (parts.length < 2) return []
+  try {
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')))
+    const claimRoles = payload?.[roleClaimKey]
+    if (Array.isArray(claimRoles)) return claimRoles
+    if (typeof claimRoles === 'string') return [claimRoles]
+  } catch {
+    // Ignore malformed token payloads.
+  }
+  return []
+}
+
 function AuthBridge({ children }) {
   const { isLoading, isAuthenticated, user, error, loginWithRedirect, logout, getAccessTokenSilently } = useAuth0()
-  const roles = parseRoles(user)
+  const [tokenRoles, setTokenRoles] = useState([])
+  const profileRoles = parseRoles(user)
+  const roles = tokenRoles.length > 0 ? tokenRoles : profileRoles
   const isAdmin = roles.some((r) => String(r).toLowerCase().includes('admin'))
 
   useEffect(() => {
     setTokenGetter(async () => (isAuthenticated ? await getAccessTokenSilently() : null))
-  }, [isAuthenticated, getAccessTokenSilently])
+    let mounted = true
+    ;(async () => {
+      if (!isAuthenticated) {
+        if (mounted) setTokenRoles([])
+        return
+      }
+      try {
+        const token = await getAccessTokenSilently()
+        if (!mounted) return
+        setTokenRoles(parseRolesFromAccessToken(token))
+      } catch {
+        if (mounted) setTokenRoles([])
+      }
+    })()
+    return () => {
+      mounted = false
+    }
+  }, [isAuthenticated, getAccessTokenSilently, user?.sub])
 
   const value = useMemo(
     () => ({

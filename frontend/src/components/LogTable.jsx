@@ -30,7 +30,7 @@ export default function LogTable({ logs = [] }) {
                 <span className="rounded border border-crimson/50 px-2 py-1 text-xs text-zinc-300">{riskTag(log.summary)}</span>
               </td>
               <td className="px-3 py-2 text-xs">
-                {log.solana_tx ? (
+                {log.solana_tx && !String(log.solana_tx).startsWith('dev-stub-') ? (
                   <a
                     className="text-crimson hover:underline"
                     href={`https://explorer.solana.com/tx/${log.solana_tx}?cluster=devnet`}
@@ -39,6 +39,8 @@ export default function LogTable({ logs = [] }) {
                   >
                     {log.solana_tx.slice(0, 14)}...
                   </a>
+                ) : log.solana_tx && String(log.solana_tx).startsWith('dev-stub-') ? (
+                  <span className="text-amber-500">stub</span>
                 ) : (
                   <span className="text-zinc-600">pending</span>
                 )}

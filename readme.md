@@ -77,6 +77,7 @@ Copy `.env.example` to `.env` and configure:
 | `ELEVEN_VOICE_ID` | ElevenLabs voice ID |
 | `SOLANA_KEYPAIR_JSON` | Base64 or JSON array keypair for devnet |
 | `SOLANA_RPC` | Solana RPC URL (default: devnet) |
+| `SOLANA_REQUIRE_ONCHAIN` | If `true`, `/api/commit` fails unless real on-chain signing is configured |
 | `EDGE_API_KEY` | Shared secret for edge ingest (optional) |
 | `MAPBOX_TOKEN` | Mapbox token for dashboard map |
 | `INGEST_INTERVAL_SEC` | Seconds between background ingest runs (default: `60`, minimum effective `15`) |
@@ -95,7 +96,7 @@ docker-compose up --build
 - Frontend: http://localhost:5173
 - AI Worker: http://localhost:8001
 
-### Production (Vultr + Atlas + Vercel)
+### Production (Vultr + Atlas)
 
 Use the production compose when deploying backend + AI worker to a server with MongoDB Atlas:
 
@@ -105,6 +106,27 @@ docker compose -f docker-compose.prod.yml up -d --build
 ```
 
 Deploy the frontend separately (e.g. Vercel) with `VITE_API_URL` pointing to your backend.
+
+### Vultr Deployment Checklist (Backend + Worker)
+
+1. Provision Ubuntu instance and install Docker + Compose plugin.
+2. Configure DNS (e.g. `api.yourdomain.com`) to point to the instance.
+3. Set server firewall to allow `22`, `80`, `443` only.
+4. Copy project and create `.env` with production secrets:
+   - `MONGO_URI` (Atlas)
+   - `AUTH0_DOMAIN`, `AUTH0_AUDIENCE`
+   - `GEMINI_API_KEY`, `ELEVEN_API_KEY`
+   - `SOLANA_KEYPAIR_JSON`
+   - `SOLANA_REQUIRE_ONCHAIN=true`
+5. Start services:
+   ```bash
+   docker compose -f docker-compose.prod.yml up -d --build
+   ```
+6. Put a TLS reverse proxy in front (Nginx/Caddy/Traefik) and enforce HTTPS.
+7. Validate health:
+   - `GET /health`
+   - `GET /api/ai/status`
+   - `GET /api/audit/verify` (expects `hash_mismatch: 0`)
 
 ### Edge Agent (Pi)
 
@@ -148,6 +170,8 @@ SUPER_API=http://your-backend:8000 EDGE_ID=pi-001 ./edge
 - `GET /api/session/city` and `POST /api/session/city` - active city per user session.
 - `GET /api/feeds/public` - city-scoped live public feeds (weather, seismic, official civic links).
 - `GET /api/ai/status` - backend AI mode and latest error (`cloud` vs local fallback).
+- `GET /api/risk/sources` - latest risk-source matrix components and composite score.
+- `GET /api/audit/verify` - verifies decision hash integrity and reports committed vs stubbed Solana logs.
 - `POST /api/chat/thread`, `GET /api/chat/threads`, and `DELETE /api/chat/thread/:id` - chat thread lifecycle.
 - `GET /api/chat/thread/:id/messages` and `POST /api/chat/thread/:id/message` - persisted operator chat.
 

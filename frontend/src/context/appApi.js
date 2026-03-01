@@ -23,8 +23,9 @@ export async function getLogs(city) {
   return data?.decisions || []
 }
 
-export async function triggerReason(city) {
-  const params = city?.city_id ? { city_id: city.city_id } : undefined
+export async function triggerReason(city, options = {}) {
+  const params = city?.city_id ? { city_id: city.city_id } : {}
+  if (options?.focus) params.focus = options.focus
   const { data } = await api.post('/api/reason', {}, { params })
   return data
 }
@@ -32,6 +33,11 @@ export async function triggerReason(city) {
 export async function commitDecision(summary, audioUrl = '', city) {
   const payload = { summary, audio_url: audioUrl, city_id: city?.city_id || '' }
   const { data } = await api.post('/api/commit', payload)
+  return data
+}
+
+export async function commitLatestDecision() {
+  const { data } = await api.post('/api/commit/latest', {})
   return data
 }
 
@@ -127,6 +133,11 @@ export async function getAIStatus() {
 export async function getRiskSources(city) {
   const params = city?.city_id ? { city_id: city.city_id } : undefined
   const { data } = await api.get('/api/risk/sources', { params })
+  return data
+}
+
+export async function verifyAuditTrail() {
+  const { data } = await api.get('/api/audit/verify')
   return data
 }
 

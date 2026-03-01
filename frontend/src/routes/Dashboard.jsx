@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import AdvisoryCard from '../components/AdvisoryCard'
 import AudioPlayer from '../components/AudioPlayer'
 import MapView from '../components/MapView'
@@ -20,8 +21,10 @@ import {
   searchCities,
   sendChatMessage,
   setSessionCity,
+  triggerReason,
 } from '../context/appApi'
 import { getErrorMessage } from '../context/apiClient'
+import { useAppAuth } from '../context/AuthProvider'
 import { useAppState } from '../context/useAppState'
 import { useFetch } from '../hooks/useFetch'
 
@@ -64,6 +67,8 @@ function compactTickerItem(raw, maxLen = 140) {
 }
 
 export default function Dashboard() {
+  const navigate = useNavigate()
+  const { isAdmin } = useAppAuth()
   const [activeCity, setActiveCity] = useState(null)
   const [cityQuery, setCityQuery] = useState('')
   const [cityResults, setCityResults] = useState([])
@@ -281,6 +286,30 @@ export default function Dashboard() {
     }
   }
 
+  async function onRetryGeneration() {
+    try {
+      setVoiceBusy(true)
+      await refreshAdvisory(activeCity, true)
+      await Promise.all([stateQuery.refresh(), logsQuery.refresh()])
+    } catch (err) {
+      setChatError(getErrorMessage(err))
+    } finally {
+      setVoiceBusy(false)
+    }
+  }
+
+  async function onPredictiveAnalysis() {
+    try {
+      setVoiceBusy(true)
+      await triggerReason(activeCity, { focus: 'predictive' })
+      await Promise.all([stateQuery.refresh(), logsQuery.refresh()])
+    } catch (err) {
+      setChatError(getErrorMessage(err))
+    } finally {
+      setVoiceBusy(false)
+    }
+  }
+
   return (
     <main className="mx-auto grid h-full w-full max-w-7xl gap-4 px-4 py-4 lg:grid-cols-[1.8fr_1fr]">
       <section className="space-y-4">
@@ -329,6 +358,10 @@ export default function Dashboard() {
           actions={latestDecision?.actions || ['Monitor transit corridors', 'Stage EMS', 'Broadcast advisory']}
           forecast={latestDecision?.forecast || ''}
           confidence={typeof latestDecision?.confidence === 'number' ? latestDecision.confidence : null}
+          onRetryGeneration={onRetryGeneration}
+          onReviewAIOutput={() => navigate('/admin')}
+          onPredictiveAnalysis={isAdmin ? onPredictiveAnalysis : null}
+          busy={voiceBusy}
         />
         <div className="panel rounded-xl py-2">
           <div className="ticker-viewport px-3">

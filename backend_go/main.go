@@ -34,7 +34,7 @@ func main() {
 	r.Use(gin.Recovery())
 	r.Use(func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Edge-Key")
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(http.StatusNoContent)
@@ -44,7 +44,7 @@ func main() {
 	})
 
 	// Public
-	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	r.GET("/health", h.Health)
 	r.GET("/api/state", h.State)
 	r.GET("/api/telemetry", h.Telemetry)
 
@@ -67,6 +67,7 @@ func main() {
 		user.GET("/cities/search", h.SearchCities)
 		user.GET("/feeds/public", h.PublicFeeds)
 		user.GET("/ai/status", h.AIStatus)
+		user.GET("/audit/verify", h.VerifyAuditTrail)
 		user.GET("/risk/sources", h.RiskSources)
 		user.POST("/advisory/refresh", h.RefreshAdvisory)
 		user.GET("/logs", h.Logs)
@@ -82,6 +83,7 @@ func main() {
 	{
 		admin.POST("/reason", h.Reason)
 		admin.POST("/commit", h.Commit)
+		admin.POST("/commit/latest", h.CommitLatest)
 	}
 
 	go func() {

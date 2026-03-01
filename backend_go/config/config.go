@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"strconv"
+	"strings"
 )
 
 type Config struct {
@@ -20,6 +21,7 @@ type Config struct {
 	HostURL       string
 	SolanaRPC     string
 	SolanaKeypair string
+	SolanaRequireOnchain bool
 	OpenWeatherKey string
 	IngestLat      float64
 	IngestLon      float64
@@ -41,6 +43,7 @@ func Load() *Config {
 		HostURL:       getEnv("HOST_URL", "http://localhost:8000"),
 		SolanaRPC:      getEnv("SOLANA_RPC", "https://api.devnet.solana.com"),
 		SolanaKeypair:  getEnv("SOLANA_KEYPAIR_JSON", ""),
+		SolanaRequireOnchain: parseBool(getEnv("SOLANA_REQUIRE_ONCHAIN", "false"), false),
 		OpenWeatherKey: getEnv("OPENWEATHER_KEY", ""),
 		IngestLat:      parseFloat(getEnv("INGEST_LAT", "40.7128"), 40.7128),
 		IngestLon:      parseFloat(getEnv("INGEST_LON", "-74.006"), -74.006),
@@ -82,6 +85,20 @@ func parseInt(s string, def int) int {
 		return def
 	}
 	return v
+}
+
+func parseBool(s string, def bool) bool {
+	if s == "" {
+		return def
+	}
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "y", "on":
+		return true
+	case "0", "false", "no", "n", "off":
+		return false
+	default:
+		return def
+	}
 }
 
 func getEnv(key, fallback string) string {

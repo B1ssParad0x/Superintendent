@@ -44,6 +44,13 @@ func New(cfg *config.Config) (*Handlers, error) {
 	return &Handlers{cfg: cfg, ai: g, worker: w, solana: sc}, nil
 }
 
+func (h *Handlers) Health(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"ok": true,
+		"ts": time.Now().UTC(),
+	})
+}
+
 // Ingest handles POST /api/ingest - verify edge signature, store, enqueue AI
 func (h *Handlers) Ingest(c *gin.Context) {
 	var req models.IngestRequest
@@ -124,6 +131,10 @@ func (h *Handlers) Reason(c *gin.Context) {
 	}
 
 	recentDecisions := h.getRecentDecisionSummaries(ctx, activeCity.CityID, 5)
+	if strings.EqualFold(strings.TrimSpace(c.Query("focus")), "predictive") {
+		recentDecisions = append(recentDecisions,
+			"OPERATOR_REQUEST: prioritize predictive analysis with explicit 30m, 3h, and 12h outlooks plus key leading indicators.")
+	}
 	resp, err := h.ai.Reason(ctx, activeCity.CityName, summary, recentDecisions)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -171,6 +182,12 @@ func (h *Handlers) Commit(c *gin.Context) {
 	hash := auth.HashForSolana(body.Summary + "|" + activeCity.CityID)
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
+	if h.cfg.SolanaRequireOnchain && (h.solana == nil || !h.solana.Enabled()) {
+		c.JSON(http.StatusPreconditionFailed, gin.H{
+			"error": "on-chain commit required but SOLANA_KEYPAIR_JSON is not configured",
+		})
+		return
+	}
 
 	txSig, err := h.solana.SubmitMemo(ctx, hash)
 	if err != nil {
@@ -178,22 +195,92 @@ func (h *Handlers) Commit(c *gin.Context) {
 		return
 	}
 
-	doc := models.Decision{
-		When:        time.Now(),
-		Summary:     body.Summary,
-		Hash:        hash,
-		AudioURL:    body.AudioURL,
-		SolanaTx:    txSig,
-		CityID:      activeCity.CityID,
-		CityName:    activeCity.CityName,
-		CountryCode: activeCity.CountryCode,
+	// Prefer marking an existing uncommitted advisory as committed.
+	update := bson.M{
+		"$set": bson.M{
+			"solana_tx": txSig,
+			"hash":      hash,
+			"source":    "manual_commit",
+		},
 	}
-	if _, err := db.DecisionsCol.InsertOne(ctx, doc); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store decision"})
+	filter := bson.M{
+		"city_id":   activeCity.CityID,
+		"summary":   body.Summary,
+		"solana_tx": bson.M{"$in": []any{"", nil}},
+	}
+	result, err := db.DecisionsCol.UpdateOne(ctx, filter, update)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update existing advisory"})
 		return
+	}
+	if result.MatchedCount == 0 {
+		doc := models.Decision{
+			When:        time.Now(),
+			Summary:     body.Summary,
+			Hash:        hash,
+			AudioURL:    body.AudioURL,
+			SolanaTx:    txSig,
+			CityID:      activeCity.CityID,
+			CityName:    activeCity.CityName,
+			CountryCode: activeCity.CountryCode,
+			Source:      "manual_commit",
+		}
+		if _, err := db.DecisionsCol.InsertOne(ctx, doc); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to store decision"})
+			return
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"tx": txSig, "hash": hash})
+}
+
+// CommitLatest commits the newest uncommitted advisory for the active city.
+func (h *Handlers) CommitLatest(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	if h.cfg.SolanaRequireOnchain && (h.solana == nil || !h.solana.Enabled()) {
+		c.JSON(http.StatusPreconditionFailed, gin.H{"error": "on-chain commit required but SOLANA_KEYPAIR_JSON is not configured"})
+		return
+	}
+
+	var latest models.Decision
+	err := db.DecisionsCol.FindOne(ctx, bson.M{
+		"city_id":   activeCity.CityID,
+		"solana_tx": bson.M{"$in": []any{"", nil}},
+	}, options.FindOne().SetSort(bson.D{{Key: "when", Value: -1}})).Decode(&latest)
+	if err != nil || strings.TrimSpace(latest.Summary) == "" {
+		c.JSON(http.StatusNotFound, gin.H{"error": "no uncommitted advisory found"})
+		return
+	}
+
+	hash := auth.HashForSolana(latest.Summary + "|" + activeCity.CityID)
+	txSig, err := h.solana.SubmitMemo(ctx, hash)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
+	_, err = db.DecisionsCol.UpdateOne(ctx, bson.M{
+		"city_id": activeCity.CityID,
+		"when":    latest.When,
+		"summary": latest.Summary,
+	}, bson.M{
+		"$set": bson.M{
+			"solana_tx": txSig,
+			"hash":      hash,
+			"source":    "manual_commit",
+		},
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update advisory"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"tx":      txSig,
+		"hash":    hash,
+		"summary": latest.Summary,
+	})
 }
 
 // Telemetry handles GET /api/telemetry - public recent telemetry for map
@@ -293,6 +380,77 @@ func (h *Handlers) Logs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"decisions": decisions})
+}
+
+// VerifyAuditTrail checks decision hash integrity and Solana commit status.
+func (h *Handlers) VerifyAuditTrail(c *gin.Context) {
+	principalID := h.getPrincipalID(c)
+	activeCity, _ := h.getActiveCity(c.Request.Context(), principalID)
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
+	defer cancel()
+
+	cur, err := db.DecisionsCol.Find(ctx, h.cityFilter(activeCity.CityID),
+		options.Find().SetSort(bson.D{{Key: "when", Value: -1}}).SetLimit(300))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	var decisions []models.Decision
+	if err := cur.All(ctx, &decisions); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	issues := make([]gin.H, 0)
+	committed := 0
+	stubbed := 0
+	hashMismatch := 0
+	for _, d := range decisions {
+		expected := ""
+		if strings.TrimSpace(d.SolanaTx) != "" {
+			expected = auth.HashForSolana(d.Summary + "|" + d.CityID)
+		} else if strings.TrimSpace(d.Source) != "" {
+			expected = auth.HashForSolana(d.Summary + "|" + d.CityID + "|" + d.Source)
+		} else {
+			// Older local-only rows may not include a source. Keep them verifiable.
+			expected = auth.HashForSolana(d.Summary + "|" + d.CityID)
+		}
+		if strings.TrimSpace(expected) != strings.TrimSpace(d.Hash) {
+			hashMismatch++
+			issues = append(issues, gin.H{
+				"when":         d.When,
+				"summary":      firstN(d.Summary, 120),
+				"type":         "hash_mismatch",
+				"expected":     expected,
+				"actual":       d.Hash,
+				"solana_tx":    d.SolanaTx,
+				"city_id":      d.CityID,
+				"country_code": d.CountryCode,
+			})
+		}
+
+		tx := strings.TrimSpace(d.SolanaTx)
+		if tx == "" {
+			continue
+		}
+		if strings.HasPrefix(tx, "dev-stub-") {
+			stubbed++
+			continue
+		}
+		committed++
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"city_id":         activeCity.CityID,
+		"city_name":       activeCity.CityName,
+		"country_code":    activeCity.CountryCode,
+		"checked":         len(decisions),
+		"committed_count": committed,
+		"stubbed_count":   stubbed,
+		"hash_mismatch":   hashMismatch,
+		"ok":              hashMismatch == 0,
+		"issues":          issues,
+	})
 }
 
 func (h *Handlers) AIStatus(c *gin.Context) {

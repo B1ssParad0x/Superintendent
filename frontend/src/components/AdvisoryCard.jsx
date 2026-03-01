@@ -21,7 +21,17 @@ function normalizeSummary(raw) {
     .trim()
 }
 
-export default function AdvisoryCard({ summary, risk = 0, actions = [], forecast = '', confidence = null }) {
+export default function AdvisoryCard({
+  summary,
+  risk = 0,
+  actions = [],
+  forecast = '',
+  confidence = null,
+  onRetryGeneration,
+  onReviewAIOutput,
+  onPredictiveAnalysis,
+  busy = false,
+}) {
   const frame = risk > 85 ? 'border-red-500/60 crisis' : risk > 60 ? 'border-orange-400/50' : 'border-zinc-800'
   const actionList = Array.isArray(actions)
     ? actions
@@ -30,6 +40,8 @@ export default function AdvisoryCard({ summary, risk = 0, actions = [], forecast
       : []
   const cleanSummary = normalizeSummary(summary)
   const cleanForecast = normalizeSummary(forecast)
+  const hasRetryAction = actionList.some((a) => /retry/i.test(String(a)))
+  const hasReviewAction = actionList.some((a) => /review/i.test(String(a)))
 
   return (
     <motion.section
@@ -49,11 +61,56 @@ export default function AdvisoryCard({ summary, risk = 0, actions = [], forecast
       {cleanForecast && <p className="mt-2 text-xs text-zinc-400">Forecast: {cleanForecast}</p>}
       {actionList.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
-          {actionList.map((action, index) => (
-            <span key={`${action}-${index}`} className="rounded bg-zinc-900 px-2 py-1 text-xs text-zinc-300">
-              {action}
-            </span>
-          ))}
+          {actionList.map((action, index) => {
+            const text = String(action)
+            if (/retry/i.test(text) && typeof onRetryGeneration === 'function') {
+              return (
+                <button
+                  key={`${text}-${index}`}
+                  onClick={onRetryGeneration}
+                  disabled={busy}
+                  className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 transition hover:bg-zinc-700 disabled:opacity-60"
+                >
+                  {busy ? 'Retrying...' : text}
+                </button>
+              )
+            }
+            if (/review/i.test(text) && typeof onReviewAIOutput === 'function') {
+              return (
+                <button
+                  key={`${text}-${index}`}
+                  onClick={onReviewAIOutput}
+                  className="rounded bg-zinc-800 px-2 py-1 text-xs text-zinc-100 transition hover:bg-zinc-700"
+                >
+                  {text}
+                </button>
+              )
+            }
+            return (
+              <span key={`${text}-${index}`} className="rounded bg-zinc-900 px-2 py-1 text-xs text-zinc-300">
+                {text}
+              </span>
+            )
+          })}
+          {!hasRetryAction && typeof onRetryGeneration === 'function' && (
+            <button
+              onClick={onRetryGeneration}
+              disabled={busy}
+              className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-100 transition hover:bg-zinc-900 disabled:opacity-60"
+            >
+              {busy ? 'Retrying...' : 'Retry generation'}
+            </button>
+          )}
+          {typeof onPredictiveAnalysis === 'function' && (
+            <button onClick={onPredictiveAnalysis} className="rounded border border-crimson/50 px-2 py-1 text-xs text-zinc-100 transition hover:bg-crimson/20">
+              Predictive Analysis
+            </button>
+          )}
+          {!hasReviewAction && typeof onReviewAIOutput === 'function' && (
+            <button onClick={onReviewAIOutput} className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-100 transition hover:bg-zinc-900">
+              Review AI output
+            </button>
+          )}
         </div>
       )}
     </motion.section>

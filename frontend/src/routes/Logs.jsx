@@ -12,6 +12,11 @@ function riskFromSummary(summary = '') {
   return 'low'
 }
 
+function hasRealSolanaCommit(tx) {
+  const value = String(tx || '').trim()
+  return Boolean(value) && !value.startsWith('dev-stub-')
+}
+
 export default function Logs() {
   const [activeCity, setActiveCity] = useState(null)
   const { data = [], error, loading, refresh } = useFetch(() => getLogs(activeCity), 12_000, [activeCity?.city_id])
@@ -52,7 +57,7 @@ export default function Logs() {
       const byDate = date ? new Date(entry.when).toDateString() === new Date(date).toDateString() : true
       const nodeMatch = entry.summary?.match(/node[\s:-]+([a-zA-Z0-9-_]+)/i)?.[1]
       const byNode = node === 'all' ? true : nodeMatch === node
-      const byTx = tx === 'all' ? true : tx === 'committed' ? Boolean(entry.solana_tx) : !entry.solana_tx
+      const byTx = tx === 'all' ? true : tx === 'committed' ? hasRealSolanaCommit(entry.solana_tx) : !hasRealSolanaCommit(entry.solana_tx)
       const byQuery = query.trim() ? entry.summary?.toLowerCase().includes(query.trim().toLowerCase()) : true
       return byRisk && byDate && byNode && byTx && byQuery
     })
@@ -61,7 +66,7 @@ export default function Logs() {
   const totals = useMemo(() => {
     return {
       total: rows.length,
-      committed: rows.filter((x) => Boolean(x.solana_tx)).length,
+      committed: rows.filter((x) => hasRealSolanaCommit(x.solana_tx)).length,
       withAudio: rows.filter((x) => Boolean(x.audio_url)).length,
     }
   }, [rows])

@@ -20,6 +20,10 @@ type Client struct {
 	keypair *types.Account
 }
 
+func (c *Client) Enabled() bool {
+	return c != nil && c.keypair != nil
+}
+
 func New(rpcURL string, keypairJSON string) (*Client, error) {
 	ep := rpc.DevnetRPCEndpoint
 	if rpcURL != "" {

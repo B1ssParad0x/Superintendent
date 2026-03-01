@@ -38,7 +38,7 @@ function AuthBridge({ children }) {
       roleLabel: isAdmin ? 'admin' : roles[0] || 'viewer',
       isAdmin,
       authError: error || null,
-      login: () => loginWithRedirect(),
+      login: () => loginWithRedirect({ appState: { returnTo: '/dashboard' } }),
       logout: () => logout({ logoutParams: { returnTo: authLogoutURI } }),
       getToken: () => getAccessTokenSilently(),
     }),
@@ -76,10 +76,18 @@ function DevAuthProvider({ children }) {
 export function AppAuthProvider({ children }) {
   if (!hasAuth) return <DevAuthProvider>{children}</DevAuthProvider>
 
+  const onRedirectCallback = (appState) => {
+    const target = appState?.returnTo || '/dashboard'
+    window.history.replaceState({}, document.title, target)
+  }
+
   return (
     <Auth0Provider
       domain={authDomain}
       clientId={authClientId}
+      cacheLocation="localstorage"
+      useRefreshTokens
+      onRedirectCallback={onRedirectCallback}
       authorizationParams={{
         redirect_uri: authRedirectURI,
         audience: authAudience || undefined,

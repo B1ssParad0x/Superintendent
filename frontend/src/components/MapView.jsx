@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 
@@ -18,21 +18,38 @@ function featureCollection(points) {
 export default function MapView({ telemetry = [], nodes = [] }) {
   const mapRef = useRef(null)
   const containerRef = useRef(null)
+  const [mapError, setMapError] = useState('')
+  const token = import.meta.env.VITE_MAPBOX_TOKEN || ''
+  const hasPublicToken = token.startsWith('pk.')
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return
-    const token = import.meta.env.VITE_MAPBOX_TOKEN
-    if (!token) return
-    mapboxgl.accessToken = token
-    mapRef.current = new mapboxgl.Map({
-      container: containerRef.current,
-      style: 'mapbox://styles/mapbox/dark-v11',
-      center: [-74.006, 40.7128],
-      zoom: 10,
+    if (!containerRef.current || mapRef.current || !hasPublicToken) return
+
+    const container = containerRef.current
+    container.innerHTML = ''
+
+    try {
+      mapboxgl.accessToken = token
+      mapRef.current = new mapboxgl.Map({
+        container,
+        style: 'mapbox://styles/mapbox/dark-v11',
+        center: [-74.006, 40.7128],
+        zoom: 10,
+      })
+    } catch (err) {
+      setMapError(err instanceof Error ? err.message : 'Failed to initialize map.')
+      mapRef.current = null
+      return
+    }
+
+    mapRef.current.on('error', (event) => {
+      const message = event?.error?.message || 'Map rendering error.'
+      setMapError(message)
     })
 
     mapRef.current.on('load', () => {
       const map = mapRef.current
+      if (!map) return
       map.addSource('telemetry-source', { type: 'geojson', data: featureCollection(telemetry) })
       map.addLayer({
         id: 'telemetry-heat',
@@ -65,7 +82,7 @@ export default function MapView({ telemetry = [], nodes = [] }) {
         mapRef.current = null
       }
     }
-  }, [])
+  }, [hasPublicToken, token])
 
   useEffect(() => {
     const map = mapRef.current
@@ -76,8 +93,24 @@ export default function MapView({ telemetry = [], nodes = [] }) {
     if (nodeSource?.setData) nodeSource.setData(featureCollection(nodes))
   }, [telemetry, nodes])
 
-  if (!import.meta.env.VITE_MAPBOX_TOKEN) {
+  if (!token) {
     return <div className="flex h-full items-center justify-center text-sm text-zinc-500">Set `VITE_MAPBOX_TOKEN` to enable map.</div>
+  }
+
+  if (!hasPublicToken) {
+    return (
+      <div className="flex h-full items-center justify-center p-4 text-center text-sm text-amber-300">
+        Mapbox token must be a public token (`pk.*`). Your current token appears to be secret (`sk.*`), so the map is disabled.
+      </div>
+    )
+  }
+
+  if (mapError) {
+    return (
+      <div className="flex h-full items-center justify-center p-4 text-center text-sm text-red-300">
+        {mapError}
+      </div>
+    )
   }
 
   return <div ref={containerRef} className="h-full min-h-[340px] w-full rounded-xl border border-zinc-800" />

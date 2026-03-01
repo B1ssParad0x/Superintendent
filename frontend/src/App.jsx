@@ -44,9 +44,9 @@ function Landing() {
       </div>
       <section className="panel relative z-10 w-full max-w-3xl rounded-2xl border border-crimson/40 p-8 text-center">
         <div className="relative mx-auto mb-4 h-44 w-full max-w-2xl overflow-hidden rounded-md">
-          <ASCIIText text="Superintendent" asciiFontSize={8} textFontSize={220} planeBaseHeight={9} enableWaves />
+          <ASCIIText text="Superintendent" enableWaves={false} asciiFontSize={1} />
         </div>
-        <p className="mx-auto mt-1 max-w-xl text-sm text-zinc-300">
+        <p className="mx-auto mt-2 max-w-xl text-sm text-zinc-300">
           Civic intelligence that watches quietly, reasons clearly, and logs decisions immutably.
         </p>
         {authError && (

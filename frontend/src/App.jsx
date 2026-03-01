@@ -4,6 +4,7 @@ import Navbar from './components/Navbar'
 import Footer from './components/Footer'
 import FaultyTerminal from './components/FaultyTerminal'
 import ASCIIText from './components/ASCIIText'
+import AppErrorBoundary from './components/AppErrorBoundary'
 import { useAppAuth } from './context/AuthProvider'
 
 const Dashboard = lazy(() => import('./routes/Dashboard'))
@@ -21,7 +22,7 @@ function ProtectedRoute({ children, adminOnly = false }) {
 }
 
 function Landing() {
-  const { login, isAuthenticated } = useAppAuth()
+  const { login, isAuthenticated, authError } = useAppAuth()
   if (isAuthenticated) return <Navigate to="/dashboard" replace />
   return (
     <main className="relative flex min-h-[calc(100vh-118px)] items-center justify-center overflow-hidden px-4">
@@ -42,13 +43,17 @@ function Landing() {
         />
       </div>
       <section className="panel relative z-10 w-full max-w-3xl rounded-2xl border border-crimson/40 p-8 text-center">
-        <div className="relative mx-auto mb-3 h-28 w-full max-w-2xl overflow-hidden">
-          <ASCIIText text="Superintendent" asciiFontSize={8} textFontSize={180} planeBaseHeight={8} enableWaves />
+        <div className="relative mx-auto mb-4 h-44 w-full max-w-2xl overflow-hidden rounded-md">
+          <ASCIIText text="Superintendent" asciiFontSize={8} textFontSize={220} planeBaseHeight={9} enableWaves />
         </div>
-        <h1 className="mt-3 font-display text-4xl tracking-wide text-white">Superintendent</h1>
-        <p className="mx-auto mt-3 max-w-xl text-sm text-zinc-300">
+        <p className="mx-auto mt-1 max-w-xl text-sm text-zinc-300">
           Civic intelligence that watches quietly, reasons clearly, and logs decisions immutably.
         </p>
+        {authError && (
+          <p className="mx-auto mt-3 max-w-xl rounded border border-red-500/40 bg-red-950/20 px-3 py-2 text-xs text-red-200">
+            Auth error: {authError.message || 'Check callback/logout URLs in Auth0 app settings.'}
+          </p>
+        )}
         <button onClick={login} className="mt-6 rounded-md bg-crimson px-5 py-2 text-sm font-semibold text-white shadow-glow">
           Sign in with Auth0
         </button>
@@ -61,45 +66,47 @@ export default function App() {
   return (
     <div className="min-h-screen bg-black text-white">
       <Navbar />
-      <Suspense fallback={<div className="p-8 text-center text-sm text-zinc-500">Loading view...</div>}>
-        <Routes>
-          <Route path="/" element={<Landing />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedRoute>
-                <Dashboard />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/logs"
-            element={
-              <ProtectedRoute>
-                <Logs />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/nodes"
-            element={
-              <ProtectedRoute>
-                <Nodes />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/admin"
-            element={
-              <ProtectedRoute adminOnly>
-                <Admin />
-              </ProtectedRoute>
-            }
-          />
-          <Route path="/about" element={<About />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </Suspense>
+      <AppErrorBoundary>
+        <Suspense fallback={<div className="p-8 text-center text-sm text-zinc-500">Loading view...</div>}>
+          <Routes>
+            <Route path="/" element={<Landing />} />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedRoute>
+                  <Dashboard />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/logs"
+              element={
+                <ProtectedRoute>
+                  <Logs />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/nodes"
+              element={
+                <ProtectedRoute>
+                  <Nodes />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute adminOnly>
+                  <Admin />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="/about" element={<About />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
+      </AppErrorBoundary>
       <Footer />
     </div>
   )

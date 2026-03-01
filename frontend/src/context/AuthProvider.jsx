@@ -21,7 +21,7 @@ function parseRoles(user) {
 }
 
 function AuthBridge({ children }) {
-  const { isLoading, isAuthenticated, user, loginWithRedirect, logout, getAccessTokenSilently } = useAuth0()
+  const { isLoading, isAuthenticated, user, error, loginWithRedirect, logout, getAccessTokenSilently } = useAuth0()
   const roles = parseRoles(user)
   const isAdmin = roles.some((r) => String(r).toLowerCase().includes('admin'))
 
@@ -37,11 +37,12 @@ function AuthBridge({ children }) {
       roles,
       roleLabel: isAdmin ? 'admin' : roles[0] || 'viewer',
       isAdmin,
+      authError: error || null,
       login: () => loginWithRedirect(),
       logout: () => logout({ logoutParams: { returnTo: authLogoutURI } }),
       getToken: () => getAccessTokenSilently(),
     }),
-    [isLoading, isAuthenticated, user, roles, isAdmin, loginWithRedirect, logout, getAccessTokenSilently],
+    [isLoading, isAuthenticated, user, roles, isAdmin, error, loginWithRedirect, logout, getAccessTokenSilently],
   )
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
@@ -60,6 +61,7 @@ function DevAuthProvider({ children }) {
       roles: ['admin'],
       roleLabel: 'admin',
       isAdmin: true,
+      authError: null,
       login: () => {},
       logout: () => {},
       getToken: async () => 'dev',

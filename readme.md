@@ -3,6 +3,7 @@
 > _"A city is a body. I am its nervous system."_
 
 ---
+<img width="2000" height="2000" alt="Superintendent" src="https://github.com/user-attachments/assets/4d250fbc-8a20-46d0-8ad4-2a5c75d36aad" />
 
 ## Overview
 
